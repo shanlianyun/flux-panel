@@ -19,10 +19,14 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Lazy;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
 import javax.annotation.Resource;
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
 /**
@@ -62,6 +66,12 @@ public class ForwardServiceImpl extends ServiceImpl<ForwardMapper, Forward> impl
 
     @Resource
     NodeService nodeService;
+
+    @Resource
+    @Lazy
+    private SpeedLimitService speedLimitService;
+
+    private final Map<Long, Object> nodeSyncLocks = new ConcurrentHashMap<>();
 
 
     @Override
@@ -1399,6 +1409,161 @@ public class ForwardServiceImpl extends ServiceImpl<ForwardMapper, Forward> impl
             limiter = userTunnel.getSpeedId();
         }
         updateGostServices(forward, tunnel, limiter, nodeInfo, userTunnel);
+    }
+
+    @Async
+    @Override
+    public void syncNodeForwards(Long nodeId, String sessionId) {
+        // Only add missing resources: updating existing GOST services would close live connections.
+        // Serialize reconnects of the same node; discard work queued by an old connection.
+        synchronized (nodeSyncLocks.computeIfAbsent(nodeId, key -> new Object())) {
+            if (!WebSocketServer.isCurrentNodeSession(nodeId, sessionId)) {
+                return;
+            }
+            try {
+                List<Tunnel> tunnels = tunnelService.list(new QueryWrapper<Tunnel>()
+                        .eq("status", TUNNEL_STATUS_ACTIVE)
+                        .and(q -> q.eq("in_node_id", nodeId)
+                                .or(o -> o.eq("type", TUNNEL_TYPE_TUNNEL_FORWARD).eq("out_node_id", nodeId))));
+                Set<Integer> syncedLimiters = new HashSet<>();
+                int synced = 0;
+                for (Tunnel tunnel : tunnels) {
+                    boolean entrance = Objects.equals(tunnel.getInNodeId(), nodeId);
+                    boolean exit = Objects.equals(tunnel.getType(), TUNNEL_TYPE_TUNNEL_FORWARD)
+                            && Objects.equals(tunnel.getOutNodeId(), nodeId);
+                    if (!Objects.equals(tunnel.getStatus(), TUNNEL_STATUS_ACTIVE) || (!entrance && !exit)) {
+                        continue;
+                    }
+                    List<Forward> forwards = this.list(new QueryWrapper<Forward>()
+                            .eq("tunnel_id", tunnel.getId()).eq("status", FORWARD_STATUS_ACTIVE).orderByAsc("id"));
+                    for (Forward forward : forwards) {
+                        if (!WebSocketServer.isCurrentNodeSession(nodeId, sessionId)) {
+                            return;
+                        }
+                        try {
+                            // Earlier commands may take seconds; queued snapshots can already be deleted or paused.
+                            forward = this.getById(forward.getId());
+                            if (forward == null || !Objects.equals(forward.getStatus(), FORWARD_STATUS_ACTIVE)
+                                    || !Objects.equals(forward.getTunnelId(), tunnel.getId().intValue())) {
+                                continue;
+                            }
+                            Tunnel currentTunnel = tunnelService.getById(forward.getTunnelId());
+                            if (currentTunnel == null || !Objects.equals(currentTunnel.getStatus(), TUNNEL_STATUS_ACTIVE)) {
+                                continue;
+                            }
+                            boolean currentEntrance = Objects.equals(currentTunnel.getInNodeId(), nodeId);
+                            boolean currentExit = Objects.equals(currentTunnel.getType(), TUNNEL_TYPE_TUNNEL_FORWARD)
+                                    && Objects.equals(currentTunnel.getOutNodeId(), nodeId);
+                            if (!currentEntrance && !currentExit) {
+                                continue;
+                            }
+                            User user = userService.getById(forward.getUserId());
+                            UserTunnel grant = getUserTunnel(forward.getUserId(), forward.getTunnelId());
+                            if (!canRestoreForward(user, grant)) {
+                                continue;
+                            }
+                            R result = restoreNodeForward(nodeId, forward, currentTunnel, grant,
+                                    currentEntrance, currentExit, syncedLimiters);
+                            if (result.getCode() == 0) {
+                                synced++;
+                            } else {
+                                log.warn("Node {} rule {} sync failed: {}", nodeId, forward.getId(), result.getMsg());
+                            }
+                        } catch (Exception e) {
+                            log.error("Node {} queued rule sync failed", nodeId, e);
+                        }
+                    }
+                }
+                log.info("Node {} rule sync complete: {} checked", nodeId, synced);
+            } catch (Exception e) {
+                log.error("Node {} rule sync failed", nodeId, e);
+            }
+        }
+    }
+
+    private boolean canRestoreForward(User user, UserTunnel grant) {
+        if (user == null || !Objects.equals(user.getStatus(), 1)) {
+            return false;
+        }
+        if (Objects.equals(user.getRoleId(), ADMIN_ROLE_ID)) {
+            return true;
+        }
+        long now = System.currentTimeMillis();
+        return (user.getExpTime() == null || user.getExpTime() > now)
+                && hasRemainingFlow(user.getFlow(), user.getInFlow(), user.getOutFlow())
+                && grant != null && Objects.equals(grant.getStatus(), 1)
+                && (grant.getExpTime() == null || grant.getExpTime() > now)
+                && hasRemainingFlow(grant.getFlow(), grant.getInFlow(), grant.getOutFlow());
+    }
+
+    private boolean hasRemainingFlow(Long quota, Long inFlow, Long outFlow) {
+        if (quota == null || quota <= 0) {
+            return false;
+        }
+        long usedIn = inFlow == null ? 0 : inFlow;
+        long usedOut = outFlow == null ? 0 : outFlow;
+        try {
+            return usedIn >= 0 && usedOut >= 0
+                    && Math.addExact(usedIn, usedOut) < Math.multiplyExact(quota, BYTES_TO_GB);
+        } catch (ArithmeticException e) {
+            return false;
+        }
+    }
+
+    private R restoreNodeForward(Long nodeId, Forward forward, Tunnel tunnel, UserTunnel grant,
+                                 boolean entrance, boolean exit, Set<Integer> syncedLimiters) {
+        String name = buildServiceName(forward.getId(), forward.getUserId(), grant);
+        Integer limiter = grant == null ? null : grant.getSpeedId();
+        if (entrance) {
+            if (limiter != null && !syncedLimiters.contains(limiter)) {
+                SpeedLimit speed = speedLimitService.getById(limiter);
+                if (speed == null || !Objects.equals(speed.getStatus(), 1)
+                        || !Objects.equals(speed.getTunnelId(), tunnel.getId())
+                        || speed.getSpeed() == null || speed.getSpeed() <= 0) {
+                    return R.err("Assigned limiter is unavailable");
+                }
+                String rate = BigDecimal.valueOf(speed.getSpeed() / 8.0)
+                        .setScale(1, RoundingMode.HALF_UP).toPlainString();
+                GostDto result = GostUtil.AddLimiters(nodeId, speed.getId(), rate);
+                if (!isGostResourcePresent(result, "limiter " + speed.getId())) {
+                    return R.err(result.getMsg());
+                }
+                syncedLimiters.add(limiter);
+            }
+            if (Objects.equals(tunnel.getType(), TUNNEL_TYPE_TUNNEL_FORWARD)) {
+                String outIp = tunnel.getOutIp();
+                String address = (outIp.contains(":") ? "[" + outIp + "]" : outIp) + ":" + forward.getOutPort();
+                GostDto result = GostUtil.AddChains(nodeId, name, address, tunnel.getProtocol(), tunnel.getInterfaceName());
+                if (!isGostResourcePresent(result, "chain " + name + "_chains")) {
+                    return R.err(result.getMsg());
+                }
+            }
+        }
+        if (exit) {
+            GostDto result = GostUtil.AddRemoteService(nodeId, name, forward.getOutPort(), forward.getRemoteAddr(),
+                    tunnel.getProtocol(), forward.getStrategy(), forward.getInterfaceName());
+            if (!isGostResourcePresent(result, "service " + name + "_tls")) {
+                return R.err(result.getMsg());
+            }
+        }
+        if (entrance) {
+            String networkInterface = Objects.equals(tunnel.getType(), TUNNEL_TYPE_TUNNEL_FORWARD)
+                    ? null : forward.getInterfaceName();
+            // A batch add stops at the first existing protocol; repair TCP and UDP independently.
+            for (String protocol : new String[]{"tcp", "udp"}) {
+                GostDto result = GostUtil.AddService(nodeId, name, forward.getInPort(), limiter,
+                        forward.getRemoteAddr(), tunnel.getType(), tunnel, forward.getStrategy(), networkInterface, protocol);
+                if (!isGostResourcePresent(result, "service " + name + "_" + protocol)) {
+                    return R.err(result.getMsg());
+                }
+            }
+        }
+        return R.ok();
+    }
+
+    private boolean isGostResourcePresent(GostDto result, String resource) {
+        return result != null && (GOST_SUCCESS_MSG.equals(result.getMsg())
+                || (resource + " already exists").equals(result.getMsg()));
     }
 
 

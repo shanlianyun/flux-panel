@@ -36,6 +36,10 @@ jobs:
           java-version: '21'
           cache: maven
 
+      - name: Test node reconnect rule recovery
+        working-directory: springboot-backend
+        run: mvn --batch-mode --no-transfer-progress -Dtest=NodeReconnectSyncTest test
+
       - name: Compile backend
         working-directory: springboot-backend
         run: mvn --batch-mode --no-transfer-progress -DskipTests package
@@ -49,6 +53,10 @@ jobs:
       - name: Compile gost
         working-directory: go-gost
         run: CGO_ENABLED=0 go build ./...
+
+      - name: Test gost startup readiness
+        working-directory: go-gost
+        run: bash test_startup.sh
 
       - name: Check shell syntax
         run: bash -n panel_install.sh install.sh proxy.sh

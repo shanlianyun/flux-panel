@@ -16,6 +16,7 @@ import (
 	metrics "github.com/go-gost/x/metrics/service"
 	"github.com/go-gost/x/registry"
 	xservice "github.com/go-gost/x/service"
+	"github.com/go-gost/x/socket"
 	"github.com/judwhite/go-svc"
 	"net/http"
 	"os"
@@ -29,6 +30,7 @@ type program struct {
 	srvApi       service.Service
 	srvMetrics   service.Service
 	srvProfiling *http.Server
+	wsReporter   *socket.WebSocketReporter
 
 	cancel context.CancelFunc
 }
@@ -48,6 +50,12 @@ func (p *program) Init(env svc.Environment) error {
 }
 
 func (p *program) Start() error {
+	panelConfig, err := LoadConfig("config.json")
+	if err != nil {
+		return err
+	}
+	xservice.SetHTTPReportURL(panelConfig.Addr, panelConfig.Secret)
+
 	cfg, err := parser.Parse()
 	if err != nil {
 		return err
@@ -73,6 +81,8 @@ func (p *program) Start() error {
 	ctx, cancel := context.WithCancel(context.Background())
 	p.cancel = cancel
 	go p.reload(ctx)
+	// The panel may restore rules immediately after connecting; load registries first.
+	p.wsReporter = socket.StartWebSocketReporterWithConfig(panelConfig.Addr, panelConfig.Secret, "1.2.0")
 
 	go func() {
 		select {
@@ -177,6 +187,9 @@ func (p *program) run(cfg *config.Config) error {
 func (p *program) Stop() error {
 	if p.cancel != nil {
 		p.cancel()
+	}
+	if p.wsReporter != nil {
+		p.wsReporter.Stop()
 	}
 
 	for name, srv := range registry.ServiceRegistry().GetAll() {

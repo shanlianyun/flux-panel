@@ -15,8 +15,6 @@ import (
 
 	"github.com/go-gost/core/logger"
 	xlogger "github.com/go-gost/x/logger"
-	"github.com/go-gost/x/service"
-	"github.com/go-gost/x/socket"
 	"github.com/judwhite/go-svc"
 )
 
@@ -107,22 +105,8 @@ func init() {
 }
 
 func main() {
-	// 加载配置文件
-	config, err := LoadConfig("config.json")
-	if err != nil {
-		fmt.Println("❌ 配置加载失败: %v\n", err)
-		fmt.Println("请确保当前目录存在 config.json 文件")
-		os.Exit(1)
-	}
-
-	fmt.Println("✅ 配置加载成功 - addr: %s", config.Addr)
-
 	log := xlogger.NewLogger()
 	logger.SetDefault(log)
-
-	wsReporter := socket.StartWebSocketReporterWithConfig(config.Addr, config.Secret, "1.2.0")
-	defer wsReporter.Stop()
-	service.SetHTTPReportURL(config.Addr, config.Secret)
 
 	p := &program{}
 	if err := svc.Run(p); err != nil {

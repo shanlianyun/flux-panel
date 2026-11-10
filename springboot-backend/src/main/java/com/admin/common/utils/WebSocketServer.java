@@ -6,11 +6,13 @@ import com.admin.common.dto.GostDto;
 import com.admin.common.task.CheckGostConfigAsync;
 import com.admin.entity.Node;
 import com.admin.service.NodeService;
+import com.admin.service.ForwardService;
 import com.alibaba.fastjson.JSON;
 import com.alibaba.fastjson.JSONObject;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.web.socket.CloseStatus;
 import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
@@ -30,6 +32,10 @@ public class WebSocketServer extends TextWebSocketHandler {
 
     @Resource
     NodeService nodeService;
+
+    @Resource
+    @Lazy
+    private ForwardService forwardService;
 
     // 存储所有活跃的 WebSocket 连接（
     private static final CopyOnWriteArraySet<WebSocketSession> activeSessions = new CopyOnWriteArraySet<>();
@@ -267,6 +273,13 @@ public class WebSocketServer extends TextWebSocketHandler {
                         res.put("type", "status");
                         res.put("data", 1);
                         broadcastMessage(res.toJSONString());
+
+                        // Command replies need the WebSocket reader, so replay off this callback.
+                        try {
+                            forwardService.syncNodeForwards(nodeId, session.getId());
+                        } catch (Exception e) {
+                            log.error("Unable to schedule rule sync for node {}", nodeId, e);
+                        }
                     } else {
                         log.info("节点 {} 状态更新失败", nodeId);
                     }
@@ -421,6 +434,11 @@ public class WebSocketServer extends TextWebSocketHandler {
     }
 
 
+
+    public static boolean isCurrentNodeSession(Long nodeId, String sessionId) {
+        WebSocketSession session = nodeSessions.get(nodeId);
+        return session != null && session.isOpen() && Objects.equals(session.getId(), sessionId);
+    }
 
     public static GostDto send_msg(Long node_id, Object msg, String type) {
         WebSocketSession nodeSession = nodeSessions.get(node_id);
