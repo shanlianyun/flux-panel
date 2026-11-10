@@ -100,7 +100,7 @@ public class FlowController extends BaseController {
     }
 
     @PostMapping("/config")
-    @LogAnnotation
+    @LogAnnotation(debug = true)
     public String config(@RequestBody String rawData, String secret) {
         Node node = nodeService.getOne(new QueryWrapper<Node>().eq("secret", secret));
         if (node == null) return SUCCESS_RESPONSE;
@@ -113,7 +113,7 @@ public class FlowController extends BaseController {
             GostConfigDto gostConfigDto = JSON.parseObject(decryptedData, GostConfigDto.class);
             checkGostConfigAsync.cleanNodeConfigs(node.getId().toString(), gostConfigDto);
 
-            log.info("🔓 节点 {} 配置数据接收成功{}", node.getId(), isEncryptedMessage(rawData) ? "（已解密）" : "");
+            log.debug("🔓 节点 {} 配置数据接收成功{}", node.getId(), isEncryptedMessage(rawData) ? "（已解密）" : "");
 
         } catch (Exception e) {
             log.error("处理节点 {} 配置数据失败: {}", node.getId(), e.getMessage());
@@ -123,7 +123,7 @@ public class FlowController extends BaseController {
     }
 
     @RequestMapping("/test")
-    @LogAnnotation
+    @LogAnnotation(debug = true)
     public String test() {
         return "test";
     }
@@ -136,7 +136,7 @@ public class FlowController extends BaseController {
      * @return 处理结果
      */
     @RequestMapping("/upload")
-    @LogAnnotation
+    @LogAnnotation(debug = true)
     public String uploadFlowData(@RequestBody String rawData, String secret) {
         // 1. 验证节点权限
         if (!isValidNode(secret)) {
@@ -153,7 +153,7 @@ public class FlowController extends BaseController {
         }
 
         // 记录日志
-        log.info("节点上报流量数据{}", flowDataList);
+        log.debug("节点上报流量数据{}", flowDataList);
         // 4. 处理流量数据
         return processFlowData(flowDataList);
     }

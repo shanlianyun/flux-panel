@@ -86,7 +86,7 @@ public class WebSocketServer extends TextWebSocketHandler {
                     // 先发送确认消息
                     sendToUser(session, "{\"type\":\"call\"}", nodeSecret);
                 }else if (decryptedPayload.contains("requestId")) {
-                    log.info("收到消息: {}", decryptedPayload);
+                    log.debug("收到消息: {}", decryptedPayload);
                     // 处理命令响应消息
                     try {
                         JSONObject responseJson = JSONObject.parseObject(decryptedPayload);
@@ -121,7 +121,7 @@ public class WebSocketServer extends TextWebSocketHandler {
                         log.info("处理响应消息失败: {}", e.getMessage(), e);
                     }
                 } else {
-                    log.info("收到消息: {}", decryptedPayload);
+                    log.debug("收到消息: {}", decryptedPayload);
                 }
 
                 // 如果是节点类型，转发消息给其他会话

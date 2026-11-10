@@ -40,6 +40,9 @@ mybatis-plus:
 
 jwt-secret: ${JWT_SECRET}
 log-dir: ${LOG_DIR}
+log-file-max-size: ${LOG_FILE_MAX_SIZE:20MB}
+log-file-max-history: ${LOG_FILE_MAX_HISTORY:7}
+log-file-total-size-cap: ${LOG_FILE_TOTAL_SIZE_CAP:200MB}
 
 # 验证码配置
 captcha:

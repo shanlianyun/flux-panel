@@ -14,6 +14,7 @@
 ## 文档地址
 - [文档地址](https://shanlianyun.github.io/flux-panel/)
 - [从原作者版本迁移到本 fork](docs/migrate-from-original.md)
+- [日志容量、轮转与历史日志处理](docs/log-retention.md)
 ---
 ## 特性
 

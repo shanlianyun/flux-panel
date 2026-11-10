@@ -1,6 +1,13 @@
+x-logging: &bounded-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   mysql:
     image: mysql:5.7
+    logging: *bounded-logging
     container_name: gost-mysql
     restart: unless-stopped
     environment:
@@ -27,6 +34,7 @@ services:
 
   backend:
     image: ghcr.io/shanlianyun/flux-panel-backend:${IMAGE_TAG:-latest}
+    logging: *bounded-logging
     container_name: springboot-backend
     restart: unless-stopped
     environment:
@@ -36,6 +44,9 @@ services:
       DB_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in .env}
       JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env}
       LOG_DIR: /app/logs
+      LOG_FILE_MAX_SIZE: ${LOG_FILE_MAX_SIZE:-20MB}
+      LOG_FILE_MAX_HISTORY: ${LOG_FILE_MAX_HISTORY:-7}
+      LOG_FILE_TOTAL_SIZE_CAP: ${LOG_FILE_TOTAL_SIZE_CAP:-200MB}
       JAVA_OPTS: "-Xms256m -Xmx512m -Dfile.encoding=UTF-8 -Duser.timezone=Asia/Shanghai"
     volumes:
       - backend_logs:/app/logs
@@ -53,6 +64,7 @@ services:
 
   frontend:
     image: ghcr.io/shanlianyun/flux-panel-frontend:${IMAGE_TAG:-latest}
+    logging: *bounded-logging
     container_name: vite-frontend
     restart: unless-stopped
     ports:

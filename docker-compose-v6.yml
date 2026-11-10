@@ -1,6 +1,13 @@
+x-logging: &bounded-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   mysql:
     image: mysql:5.7
+    logging: *bounded-logging
     container_name: gost-mysql
     restart: unless-stopped
     environment:
@@ -27,6 +34,7 @@ services:
 
   phpmyadmin:
     image: phpmyadmin/phpmyadmin
+    logging: *bounded-logging
     container_name: gost-phpmyadmin
     restart: unless-stopped
     environment:
@@ -42,6 +50,7 @@ services:
 
   backend:
     image: brunuhville/springboot-backend:latest
+    logging: *bounded-logging
     container_name: springboot-backend
     restart: unless-stopped
     environment:
@@ -51,6 +60,9 @@ services:
       DB_PASSWORD: ${DB_PASSWORD}
       JWT_SECRET: ${JWT_SECRET}
       LOG_DIR: /app/logs
+      LOG_FILE_MAX_SIZE: ${LOG_FILE_MAX_SIZE:-20MB}
+      LOG_FILE_MAX_HISTORY: ${LOG_FILE_MAX_HISTORY:-7}
+      LOG_FILE_TOTAL_SIZE_CAP: ${LOG_FILE_TOTAL_SIZE_CAP:-200MB}
       JAVA_OPTS: "-Xms256m -Xmx512m -Dfile.encoding=UTF-8 -Duser.timezone=Asia/Shanghai"
     ports:
       - "${BACKEND_PORT}:6365"
@@ -70,6 +82,7 @@ services:
 
   frontend:
     image: brunuhville/vite-frontend:latest
+    logging: *bounded-logging
     container_name: vite-frontend
     restart: unless-stopped
     ports:
