@@ -349,7 +349,7 @@ uninstall_gost() {
 main() {
   # 如果提供了命令行参数，直接执行安装
   if [[ -n "$SERVER_ADDR" && -n "$SECRET" ]]; then
-    install_gost
+    install_gost || return $?
     delete_self
     exit 0
   fi
@@ -361,12 +361,12 @@ main() {
     
     case $choice in
       1)
-        install_gost
+        install_gost || return $?
         delete_self
         exit 0
         ;;
       2)
-        update_gost
+        update_gost || return $?
         delete_self
         exit 0
         ;;
