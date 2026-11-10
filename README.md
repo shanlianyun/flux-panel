@@ -12,7 +12,7 @@
 
 ---
 ## 文档地址
-- [文档地址](https://brunuhville.github.io/flux-panel)
+- [文档地址](https://shanlianyun.github.io/flux-panel/)
 ---
 ## 特性
 
@@ -84,13 +84,13 @@
 
 面板端：
 ```bash
-curl -L https://raw.githubusercontent.com/BrunuhVille/flux-panel/refs/heads/main/panel_install.sh -o panel_install.sh && chmod +x panel_install.sh && ./panel_install.sh
+curl -L https://raw.githubusercontent.com/shanlianyun/flux-panel/refs/heads/main/panel_install.sh -o panel_install.sh && chmod +x panel_install.sh && ./panel_install.sh
 
 ```
 
 节点端：
 ```bash
-curl -L https://raw.githubusercontent.com/BrunuhVille/flux-panel/refs/heads/main/install.sh -o install.sh && chmod +x install.sh && ./install.sh
+curl -L https://raw.githubusercontent.com/shanlianyun/flux-panel/refs/heads/main/install.sh -o install.sh && chmod +x install.sh && ./install.sh
 
 ```
 
@@ -127,4 +127,3 @@ curl -L https://raw.githubusercontent.com/BrunuhVille/flux-panel/refs/heads/main
 作者对因使用本项目所造成的任何直接或间接损失概不负责，也不提供任何形式的担保或技术支持。
 
 请确保在合法、合规、安全的前提下使用本项目。
-
