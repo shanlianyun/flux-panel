@@ -52,6 +52,15 @@ public class GostUtil {
         return WebSocketServer.send_msg(node_id, services, "UpdateService");
     }
 
+    public static GostDto AddService(Long nodeId, String name, Integer inPort, Integer limiter,
+                                     String remoteAddr, Integer forwardType, Tunnel tunnel,
+                                     String strategy, String interfaceName, String protocol) {
+        JSONArray services = new JSONArray();
+        services.add(createServiceConfig(name, inPort, limiter, remoteAddr, protocol,
+                forwardType, tunnel, strategy, interfaceName));
+        return WebSocketServer.send_msg(nodeId, services, "AddService");
+    }
+
     public static GostDto DeleteService(Long node_id, String name) {
         JSONObject data = new JSONObject();
         JSONArray services = new JSONArray();

@@ -82,4 +82,7 @@ public interface ForwardService extends IService<Forward> {
 
 
     void updateForwardA(Forward forward);
+
+    /** Restore this connection's active rules without changing database state. */
+    void syncNodeForwards(Long nodeId, String sessionId);
 }
