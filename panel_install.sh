@@ -13,13 +13,12 @@ DOCKER_COMPOSEV6_URL="https://raw.githubusercontent.com/shanlianyun/flux-panel/r
 GOST_SQL_URL="https://raw.githubusercontent.com/shanlianyun/flux-panel/refs/heads/main/gost.sql"
 PROXY_SH_URL="https://raw.githubusercontent.com/shanlianyun/flux-panel/refs/heads/main/proxy.sh"
 
-COUNTRY=$(curl -s https://ipinfo.io/country)
-if [ "$COUNTRY" = "CN" ]; then
-    # 拼接 URL
-    DOCKER_COMPOSEV4_URL="https://ghfast.top/${DOCKER_COMPOSEV4_URL}"
-    DOCKER_COMPOSEV6_URL="https://ghfast.top/${DOCKER_COMPOSEV6_URL}"
-    GOST_SQL_URL="https://ghfast.top/${GOST_SQL_URL}"
-    PROXY_SH_URL="https://ghfast.top/${PROXY_SH_URL}"
+GITHUB_MIRROR_PREFIX="${GITHUB_MIRROR_PREFIX:-}"
+if [[ -n "$GITHUB_MIRROR_PREFIX" ]]; then
+    DOCKER_COMPOSEV4_URL="${GITHUB_MIRROR_PREFIX%/}/${DOCKER_COMPOSEV4_URL}"
+    DOCKER_COMPOSEV6_URL="${GITHUB_MIRROR_PREFIX%/}/${DOCKER_COMPOSEV6_URL}"
+    GOST_SQL_URL="${GITHUB_MIRROR_PREFIX%/}/${GOST_SQL_URL}"
+    PROXY_SH_URL="${GITHUB_MIRROR_PREFIX%/}/${PROXY_SH_URL}"
 fi
 
 
@@ -199,14 +198,14 @@ install_panel() {
   echo "🔽 下载必要文件..."
   DOCKER_COMPOSE_URL=$(get_docker_compose_url)
   echo "📡 选择配置文件：$(basename "$DOCKER_COMPOSE_URL")"
-  curl -L -o docker-compose.yml "$DOCKER_COMPOSE_URL"
+  curl --fail --location --retry 3 --retry-delay 2 -o docker-compose.yml "$DOCKER_COMPOSE_URL"
 
   # 检查 gost.sql 是否已存在
   if [[ -f "gost.sql" ]]; then
     echo "⏭️ 跳过下载: gost.sql (使用当前位置的文件)"
   else
     echo "📡 下载数据库初始化文件..."
-    curl -L -o gost.sql "$GOST_SQL_URL"
+    curl --fail --location --retry 3 --retry-delay 2 -o gost.sql "$GOST_SQL_URL"
   fi
   echo "✅ 文件准备完成"
 
@@ -216,6 +215,7 @@ install_panel() {
     configure_docker_ipv6
   fi
 
+  umask 077
   cat > .env <<EOF
 DB_NAME=$DB_NAME
 DB_USER=$DB_USER
@@ -224,6 +224,7 @@ JWT_SECRET=$JWT_SECRET
 FRONTEND_PORT=$FRONTEND_PORT
 BACKEND_PORT=$BACKEND_PORT
 EOF
+  chmod 600 .env
 
   echo "🚀 启动 docker 服务..."
   $DOCKER_CMD up -d
@@ -231,7 +232,7 @@ EOF
   echo "🎉 部署完成"
   echo "🌐 访问地址: http://服务器IP:$FRONTEND_PORT"
   echo "📖 部署完成后请阅读下使用文档。不要上去就是一顿操作"
-  echo "📚 文档地址: https://brunuhville.github.io/flux-panel/guide.html"
+  echo "📚 文档地址: https://shanlianyun.github.io/flux-panel/"
   echo "💡 默认管理员账号: admin_user / admin_user"
   echo "⚠️  登录后请立即修改默认密码！"
 
@@ -246,7 +247,7 @@ update_panel() {
   echo "🔽 下载最新配置文件..."
   DOCKER_COMPOSE_URL=$(get_docker_compose_url)
   echo "📡 选择配置文件：$(basename "$DOCKER_COMPOSE_URL")"
-  curl -L -o docker-compose.yml "$DOCKER_COMPOSE_URL"
+  curl --fail --location --retry 3 --retry-delay 2 -o docker-compose.yml "$DOCKER_COMPOSE_URL"
   echo "✅ 下载完成"
 
   # 自动检测并配置 IPv6 支持
@@ -1032,7 +1033,7 @@ uninstall_panel() {
     echo "⚠️ 未找到 docker-compose.yml 文件，正在下载以完成卸载..."
     DOCKER_COMPOSE_URL=$(get_docker_compose_url)
     echo "📡 选择配置文件：$(basename "$DOCKER_COMPOSE_URL")"
-    curl -L -o docker-compose.yml "$DOCKER_COMPOSE_URL"
+    curl --fail --location --retry 3 --retry-delay 2 -o docker-compose.yml "$DOCKER_COMPOSE_URL"
     echo "✅ docker-compose.yml 下载完成"
   fi
 

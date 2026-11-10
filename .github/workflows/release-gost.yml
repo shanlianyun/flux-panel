@@ -1,0 +1,51 @@
+name: Build gost release assets
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go-gost/go.mod
+          cache-dependency-path: go-gost/go.sum
+
+      - name: Build Linux binaries and checksums
+        working-directory: go-gost
+        run: |
+          mkdir -p ../dist
+          for arch in amd64 arm64; do
+            CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -trimpath -ldflags="-s -w" -o "../dist/gost-linux-${arch}" .
+            chmod 755 "../dist/gost-linux-${arch}"
+            (cd ../dist && sha256sum "gost-linux-${arch}" > "gost-linux-${arch}.sha256")
+          done
+          cp ../dist/gost-linux-amd64 ../dist/gost
+          (cd ../dist && sha256sum gost > gost.sha256)
+
+      - name: Publish or update gost-latest release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: gost-latest
+          target_commitish: main
+          name: gost-latest
+          prerelease: true
+          make_latest: false
+          files: |
+            dist/gost
+            dist/gost.sha256
+            dist/gost-linux-amd64
+            dist/gost-linux-amd64.sha256
+            dist/gost-linux-arm64
+            dist/gost-linux-arm64.sha256
+          fail_on_unmatched_files: true

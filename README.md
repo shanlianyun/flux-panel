@@ -13,6 +13,7 @@
 ---
 ## 文档地址
 - [文档地址](https://shanlianyun.github.io/flux-panel/)
+- [从原作者版本迁移到本 fork](docs/migrate-from-original.md)
 ---
 ## 特性
 
@@ -80,19 +81,55 @@
 ```
 ---
 ### Docker Compose部署
+
+当前已部署的原作者版本不会自动切换，原有 `docker-compose-v4.yml` / `docker-compose-v6.yml` 仍保留。新 fork 镜像发布到 GHCR 后，如需迁移请按[迁移指南](docs/migrate-from-original.md)操作；迁移前先备份数据库与配置，不要运行卸载选项。
+
 #### 快速部署
 
-面板端：
+**新部署请使用本 fork 的 GHCR 镜像和 fork Compose 文件**，不要使用下面的旧版 `panel_install.sh` 安装入口：该安装器和默认 Compose 文件沿用原作者镜像。先在 GitHub Actions 运行 `Validate and publish fork images`，并确认 GHCR 镜像可拉取；首次发布时应将镜像包设为 Public，或在服务器预先配置只读 GHCR 凭据。
+
+在空的部署目录下载初始化 SQL，并创建仅当前用户可读的环境文件。将 `IMAGE_TAG` 设为已发布的完整 `sha-...` 标签；修改所有示例密码/密钥，不要把以下示例值用于生产：
+
+```bash
+curl --fail --location --retry 3 --retry-delay 2 \
+  https://raw.githubusercontent.com/shanlianyun/flux-panel/main/gost.sql -o gost.sql
+umask 077
+cat > compose-fork.env <<'EOF'
+DB_NAME=flux
+DB_USER=flux_user
+DB_PASSWORD=替换为高强度随机密码
+JWT_SECRET=替换为至少32字节的随机密钥
+FRONTEND_PORT=6366
+IMAGE_TAG=sha-替换为已发布的完整提交号
+EOF
+chmod 600 compose-fork.env
+```
+
+IPv4 部署使用 `docker-compose-fork-v4.yml`；确认配置并启动：
+
+```bash
+docker compose --env-file compose-fork.env -f docker-compose-fork-v4.yml config
+docker compose --env-file compose-fork.env -f docker-compose-fork-v4.yml pull
+docker compose --env-file compose-fork.env -f docker-compose-fork-v4.yml up -d
+```
+
+IPv6 环境将上面文件名替换为 `docker-compose-fork-v6.yml`。首次 GHCR 镜像发布及现有部署迁移的详细步骤见[迁移指南](docs/migrate-from-original.md)。
+
+旧版安装入口（仅供已有原作者部署延续原有操作使用）：
+
 ```bash
 curl -L https://raw.githubusercontent.com/shanlianyun/flux-panel/refs/heads/main/panel_install.sh -o panel_install.sh && chmod +x panel_install.sh && ./panel_install.sh
-
 ```
+
+该脚本会继续使用原作者镜像配置；**不要在生产机上将它的“更新”选项当作切换到 fork 的迁移步骤**。现有系统迁移必须按迁移指南显式备份、切换并验证。
 
 节点端：
 ```bash
 curl -L https://raw.githubusercontent.com/shanlianyun/flux-panel/refs/heads/main/install.sh -o install.sh && chmod +x install.sh && ./install.sh
 
 ```
+
+默认情况下安装脚本直接从 GitHub 下载，不会通过第三方代理，也不会向 IP 定位服务查询所在地。若你的网络必须经由可信镜像，可在运行前显式设置 `GITHUB_MIRROR_PREFIX`；请自行确认镜像服务的可信度。
 
 
 

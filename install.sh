@@ -1,12 +1,58 @@
 #!/bin/bash
-# 下载地址
-DOWNLOAD_URL="https://github.com/shanlianyun/flux-panel/releases/download/gost-latest/gost"
+# 下载地址及平台选择
+RELEASE_BASE_URL="https://github.com/shanlianyun/flux-panel/releases/download/gost-latest"
+DOWNLOAD_URL=""
+CHECKSUM_URL=""
 INSTALL_DIR="/etc/gost"
-COUNTRY=$(curl -s https://ipinfo.io/country)
-if [ "$COUNTRY" = "CN" ]; then
-    # 拼接 URL
-    DOWNLOAD_URL="https://ghfast.top/${DOWNLOAD_URL}"
+GITHUB_MIRROR_PREFIX="${GITHUB_MIRROR_PREFIX:-}"
+if [[ -n "$GITHUB_MIRROR_PREFIX" ]]; then
+    RELEASE_BASE_URL="${GITHUB_MIRROR_PREFIX%/}/${RELEASE_BASE_URL}"
 fi
+
+select_gost_asset() {
+  case "$(uname -s)/$(uname -m)" in
+    Linux/x86_64|Linux/amd64) GOST_ASSET="gost" ;;
+    Linux/aarch64|Linux/arm64) GOST_ASSET="gost-linux-arm64" ;;
+    *)
+      echo "❌ 暂不支持的平台：$(uname -s)/$(uname -m)"
+      return 1
+      ;;
+  esac
+  DOWNLOAD_URL="${RELEASE_BASE_URL}/${GOST_ASSET}"
+  CHECKSUM_URL="${DOWNLOAD_URL}.sha256"
+}
+
+download_and_verify_gost() {
+  local destination="$1"
+  local checksum_file="${destination}.sha256"
+  local expected actual
+
+  if ! curl --fail --location --retry 3 --retry-delay 2 "$DOWNLOAD_URL" -o "$destination"; then
+    echo "❌ 下载 gost 失败。"
+    rm -f "$destination" "$checksum_file"
+    return 1
+  fi
+  if ! curl --fail --location --retry 3 --retry-delay 2 "$CHECKSUM_URL" -o "$checksum_file"; then
+    echo "❌ 下载 SHA-256 校验文件失败，拒绝安装未验证的二进制。"
+    rm -f "$destination" "$checksum_file"
+    return 1
+  fi
+
+  expected=$(awk 'NR == 1 {print $1}' "$checksum_file")
+  actual=$(sha256sum "$destination" | awk '{print $1}')
+  rm -f "$checksum_file"
+  if [[ ! "$expected" =~ ^[[:xdigit:]]{64}$ || "$actual" != "$expected" ]]; then
+    echo "❌ gost SHA-256 校验失败，文件未安装。"
+    rm -f "$destination"
+    return 1
+  fi
+  chmod +x "$destination"
+  if ! "$destination" -V >/dev/null 2>&1; then
+    echo "❌ 下载文件无法运行，拒绝替换现有 gost。"
+    rm -f "$destination"
+    return 1
+  fi
+}
 
 
 
@@ -135,11 +181,20 @@ install_gost() {
   echo "🚀 开始安装 GOST..."
   get_config_params
 
+  # 先检查平台及下载源，再修改现有服务或二进制
+  select_gost_asset || return 1
+
     # 检查并安装 tcpkill
   check_and_install_tcpkill
   
 
   mkdir -p "$INSTALL_DIR"
+
+  local new_binary
+  new_binary=$(mktemp "${INSTALL_DIR}/gost.new.XXXXXX")
+  if ! download_and_verify_gost "$new_binary"; then
+    return 1
+  fi
 
   # 停止并禁用已有服务
   if systemctl list-units --full -all | grep -Fq "gost.service"; then
@@ -148,18 +203,9 @@ install_gost() {
     systemctl disable gost 2>/dev/null && echo "🚫 禁用自启"
   fi
 
-  # 删除旧文件
-  [[ -f "$INSTALL_DIR/gost" ]] && echo "🧹 删除旧文件 gost" && rm -f "$INSTALL_DIR/gost"
-
-  # 下载 gost
-  echo "⬇️ 下载 gost 中..."
-  curl -L "$DOWNLOAD_URL" -o "$INSTALL_DIR/gost"
-  if [[ ! -f "$INSTALL_DIR/gost" || ! -s "$INSTALL_DIR/gost" ]]; then
-    echo "❌ 下载失败，请检查网络或下载链接。"
-    exit 1
-  fi
-  chmod +x "$INSTALL_DIR/gost"
-  echo "✅ 下载完成"
+  # 下载校验成功后才原子替换旧文件
+  mv -f "$new_binary" "$INSTALL_DIR/gost"
+  echo "✅ 下载并校验完成"
 
   # 打印版本
   echo "🔎 gost 版本：$($INSTALL_DIR/gost -V)"
@@ -229,6 +275,8 @@ update_gost() {
     echo "❌ GOST 未安装，请先选择安装。"
     return 1
   fi
+
+  select_gost_asset || return 1
   
   echo "📥 使用下载地址: $DOWNLOAD_URL"
   
@@ -237,9 +285,9 @@ update_gost() {
   
   # 先下载新版本
   echo "⬇️ 下载最新版本..."
-  curl -L "$DOWNLOAD_URL" -o "$INSTALL_DIR/gost.new"
-  if [[ ! -f "$INSTALL_DIR/gost.new" || ! -s "$INSTALL_DIR/gost.new" ]]; then
-    echo "❌ 下载失败。"
+  local new_binary
+  new_binary=$(mktemp "${INSTALL_DIR}/gost.new.XXXXXX")
+  if ! download_and_verify_gost "$new_binary"; then
     return 1
   fi
 
@@ -250,8 +298,7 @@ update_gost() {
   fi
 
   # 替换文件
-  mv "$INSTALL_DIR/gost.new" "$INSTALL_DIR/gost"
-  chmod +x "$INSTALL_DIR/gost"
+  mv -f "$new_binary" "$INSTALL_DIR/gost"
   
   # 打印版本
   echo "🔎 新版本：$($INSTALL_DIR/gost -V)"
