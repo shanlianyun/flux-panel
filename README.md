@@ -81,48 +81,30 @@
 暂时没时间写，能源码部署的都是大佬，不差我这点文档
 ```
 ---
-### Docker Compose部署
+### 一行命令打开面板管理菜单
 
-当前已部署的原作者版本不会自动切换，原有 `docker-compose-v4.yml` / `docker-compose-v6.yml` 仍保留。新 fork 镜像发布到 GHCR 后，如需迁移请按[迁移指南](docs/migrate-from-original.md)操作；迁移前先备份数据库与配置，不要运行卸载选项。
-
-#### 快速部署
-
-**新部署请使用本 fork 的 GHCR 镜像和 fork Compose 文件**，不要使用下面的旧版 `panel_install.sh` 安装入口：该安装器和默认 Compose 文件沿用原作者镜像。部署前确认最近一次 `Validate and publish fork images` 工作流的验证与发布任务均成功，并使用该次提交对应的 `sha-<完整提交号>` 镜像标签。本仓库当前前后端 GHCR 镜像已验证可匿名拉取；若之后修改包可见性，则设为 Public，或在服务器配置只读 GHCR 凭据。
-
-在空的部署目录下载初始化 SQL，并创建仅当前用户可读的环境文件。将 `IMAGE_TAG` 设为已发布的完整 `sha-...` 标签；修改所有示例密码/密钥，不要把以下示例值用于生产：
+在服务器执行（需要 Bash、curl、Python 3.8+ 和支持 JSON 配置的 Docker Compose v2）：
 
 ```bash
-curl --fail --location --retry 3 --retry-delay 2 \
-  https://raw.githubusercontent.com/shanlianyun/flux-panel/main/gost.sql -o gost.sql
-umask 077
-cat > compose-fork.env <<'EOF'
-DB_NAME=flux
-DB_USER=flux_user
-DB_PASSWORD=替换为高强度随机密码
-JWT_SECRET=替换为至少32字节的随机密钥
-FRONTEND_PORT=6366
-IMAGE_TAG=sha-替换为已发布的完整提交号
-EOF
-chmod 600 compose-fork.env
+curl --fail --location --retry 3 https://raw.githubusercontent.com/shanlianyun/flux-panel/main/panel_install.sh -o panel_install.sh && bash panel_install.sh
 ```
 
-IPv4 部署使用 `docker-compose-fork-v4.yml`；确认配置并启动：
+- **已有原作者系统：选 `7`「旧版迁移到本 fork」**，确认脚本建议的原部署目录，再按提示输入 `yes`。
+- **已迁移到本 fork：选 `2` 更新**；普通更新不会隐式迁移旧系统。
+- **全新安装：选 `1`**，使用专用空目录；发现旧容器、数据卷或同名 Compose 项目就停止。
+- `4` 导出数据库/配置备份；`8` 恢复中断的迁移/更新。脚本不会再自动删除自己，之后可直接运行 `bash panel_install.sh`。
+
+脚本检查数据库结构和剩余空间，先备份、拉取完整 `sha-提交号` 镜像，再只替换前后端；保留旧端口、网络、数据卷及其他服务，不重启 Docker、MySQL 或节点，不自动执行改表 SQL。目标镜像尚未发布、备份失败或部署不兼容时会停止。**这不是任意旧版本的通用升级器**；建议先在备份副本验证，正式切换需要短暂维护窗口。
+
+失败时会尝试回退原容器和配置，**绝不自动回灌数据库**。基础健康检查不代替登录、WebSocket、隧道和流量验证。完整支持范围、备份说明及高级手动方式见[迁移指南](docs/migrate-from-original.md)。
+
+默认跟随 `main` 对应的完整 SHA 镜像；请先确认该提交的前后端镜像发布成功。如需指定已验证版本，可运行：
 
 ```bash
-docker compose --env-file compose-fork.env -f docker-compose-fork-v4.yml config
-docker compose --env-file compose-fork.env -f docker-compose-fork-v4.yml pull
-docker compose --env-file compose-fork.env -f docker-compose-fork-v4.yml up -d
+PANEL_IMAGE_TAG=sha-替换为40位完整提交号 bash panel_install.sh
 ```
 
-IPv6 环境将上面文件名替换为 `docker-compose-fork-v6.yml`。首次 GHCR 镜像发布及现有部署迁移的详细步骤见[迁移指南](docs/migrate-from-original.md)。
-
-旧版安装入口（仅供已有原作者部署延续原有操作使用）：
-
-```bash
-curl -L https://raw.githubusercontent.com/shanlianyun/flux-panel/refs/heads/main/panel_install.sh -o panel_install.sh && chmod +x panel_install.sh && ./panel_install.sh
-```
-
-该脚本会继续使用原作者镜像配置；**不要在生产机上将它的“更新”选项当作切换到 fork 的迁移步骤**。现有系统迁移必须按迁移指南显式备份、切换并验证。
+原有 `docker-compose-v4.yml` / `docker-compose-v6.yml` 仍保留原作者镜像，供检查和兼容旧部署；新的安装菜单使用 `docker-compose-fork-v4.yml`。已有 IPv6 网络在迁移时原样保留，不自动修改 Docker daemon 配置。
 
 节点端：
 ```bash
