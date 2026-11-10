@@ -1,7 +1,9 @@
 # 常见问题
 
 
-## 面板管理脚本
+## 旧版面板管理脚本（已有部署）
+
+下面的 `panel_install.sh` 和默认 Compose 文件继续使用原作者 Docker Hub 镜像，仅用于已有部署的原有维护流程。新部署请使用[快速开始](/getting-started)中的 fork GHCR 部署方式；现有系统切换请先阅读[迁移指南](https://github.com/shanlianyun/flux-panel/blob/main/docs/migrate-from-original.md)。不要用旧版脚本的“更新”选项切换到 fork。
 
 安装、更新、卸载面板均使用同一条命令，运行后在菜单中选择对应操作：
 

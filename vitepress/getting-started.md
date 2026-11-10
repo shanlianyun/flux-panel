@@ -8,20 +8,62 @@
 
 - **操作系统**: Linux，**推荐纯净系统安装**
 - **Docker**: 20.10+ 
-- **Docker Compose**: 1.29+ 或 Docker 内置 compose 命令
+- **Docker Compose**: Docker Compose 插件 v2+
 - **内存**: 至少 1GB RAM
 - **存储**: 至少 1GB 可用空间
 - **网络**: 确保相关端口未被占用
 
-## 一键安装（推荐）
+## 使用 fork 自有镜像部署（推荐）
 
-我们提供了交互式安装脚本，会自动检测系统环境并引导您完成配置：
+新部署请使用本 fork 的 GHCR 镜像和专用 Compose 文件，不要使用下方旧版交互式安装器。部署前在 GitHub Actions 确认最近一次 `Validate and publish fork images` 的验证、前后端镜像发布任务均成功，并将 `IMAGE_TAG` 设置为该次提交的完整 `sha-<提交号>` 标签。当前前后端镜像可匿名拉取。
+
+在新目录下载初始化 SQL 和 IPv4 Compose 文件：
+
+```bash
+mkdir flux-panel && cd flux-panel
+curl --fail --location --retry 3 --retry-delay 2 \
+  https://raw.githubusercontent.com/shanlianyun/flux-panel/main/gost.sql -o gost.sql
+curl --fail --location --retry 3 --retry-delay 2 \
+  https://raw.githubusercontent.com/shanlianyun/flux-panel/main/docker-compose-fork-v4.yml -o docker-compose-fork-v4.yml
+```
+
+创建环境文件并替换所有示例密码、密钥和镜像标签。数据库密码应为高强度随机值，`JWT_SECRET` 至少 32 字节；不要复用示例值：
+
+```bash
+umask 077
+cat > compose-fork.env <<'EOF'
+DB_NAME=flux
+DB_USER=flux_user
+DB_PASSWORD=替换为高强度随机密码
+JWT_SECRET=替换为至少32字节的随机密钥
+FRONTEND_PORT=6366
+IMAGE_TAG=sha-替换为成功发布的完整提交号
+EOF
+chmod 600 compose-fork.env
+```
+
+核对 Compose 配置并启动：
+
+```bash
+docker compose --env-file compose-fork.env -f docker-compose-fork-v4.yml config
+docker compose --env-file compose-fork.env -f docker-compose-fork-v4.yml pull
+docker compose --env-file compose-fork.env -f docker-compose-fork-v4.yml up -d
+docker compose --env-file compose-fork.env -f docker-compose-fork-v4.yml ps
+```
+
+IPv6 环境下载 `docker-compose-fork-v6.yml` 替代 v4 文件，并在下面命令中相应替换 Compose 文件名。`gost.sql` 只会在全新数据库卷初始化时执行；不要把这些新部署步骤直接用于已有数据库。原作者版本迁移请先阅读[迁移指南](https://github.com/shanlianyun/flux-panel/blob/main/docs/migrate-from-original.md)，在隔离测试环境用备份副本验证后再安排生产维护窗口。
+
+首次登录后立即修改默认管理员密码，并配置防火墙，仅开放所需的前端及转发端口。fork Compose 不会将后端 API 或数据库端口映射到宿主机。
+
+## 旧版交互式安装（仅兼容已有部署）
+
+以下 `panel_install.sh` 和默认 Compose 文件仍引用原作者 Docker Hub 镜像，仅供已有原作者部署延续原有安装、更新和卸载操作。**不要将它用于新的 fork 部署，也不要把其更新选项当作迁移步骤。**
 
 ```bash
 curl -L https://raw.githubusercontent.com/shanlianyun/flux-panel/refs/heads/main/panel_install.sh -o panel_install.sh && chmod +x panel_install.sh && ./panel_install.sh
 ```
 
-### 安装流程说明
+### 旧版安装流程说明
 
 1. **运行脚本后选择操作**：
    ```
@@ -55,7 +97,7 @@ curl -L https://raw.githubusercontent.com/shanlianyun/flux-panel/refs/heads/main
 后端端口（默认 6365）: 6365         # 直接回车使用默认值
 ```
 
-## 验证安装
+## 验证旧版交互式安装
 
 ### 1. 检查服务状态
 
@@ -107,7 +149,7 @@ docker compose ps
 | 端口 | 服务 | 说明 | 可配置 |
 |------|------|------|--------|
 | 6366 | Web 界面 | 前端管理界面 | ✅ |
-| 6365 | API 服务 | 后端 REST API | ✅ |
+| 6365 | API 服务 | 旧版安装器映射；fork Compose 仅在 Docker 内网可访问 | 旧版可配置 |
 | 3306 | MySQL | 数据库服务（容器内部） | ❌ |
 | 动态分配 | 转发端口 | 用户创建的转发规则 | ✅ |
 
