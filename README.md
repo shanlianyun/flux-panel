@@ -86,7 +86,7 @@
 
 #### 快速部署
 
-**新部署请使用本 fork 的 GHCR 镜像和 fork Compose 文件**，不要使用下面的旧版 `panel_install.sh` 安装入口：该安装器和默认 Compose 文件沿用原作者镜像。先在 GitHub Actions 运行 `Validate and publish fork images`，并确认 GHCR 镜像可拉取；首次发布时应将镜像包设为 Public，或在服务器预先配置只读 GHCR 凭据。
+**新部署请使用本 fork 的 GHCR 镜像和 fork Compose 文件**，不要使用下面的旧版 `panel_install.sh` 安装入口：该安装器和默认 Compose 文件沿用原作者镜像。部署前确认最近一次 `Validate and publish fork images` 工作流的验证与发布任务均成功，并使用该次提交对应的 `sha-<完整提交号>` 镜像标签。本仓库当前前后端 GHCR 镜像已验证可匿名拉取；若之后修改包可见性，则设为 Public，或在服务器配置只读 GHCR 凭据。
 
 在空的部署目录下载初始化 SQL，并创建仅当前用户可读的环境文件。将 `IMAGE_TAG` 设为已发布的完整 `sha-...` 标签；修改所有示例密码/密钥，不要把以下示例值用于生产：
 

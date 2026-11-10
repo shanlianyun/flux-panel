@@ -4,9 +4,9 @@
 
 ## 迁移前准备
 
-1. 在 GitHub 仓库的 Actions 中手动运行 `Validate and publish fork images`。确认两个 GHCR 镜像都构建成功。
-2. 在 GitHub Packages 中检查 `flux-panel-backend` 和 `flux-panel-frontend`。若服务器未配置 GHCR 登录，需将镜像包设为 Public；若保持 Private，先在服务器配置仅有读取权限的 GitHub 凭据，并使用 `docker login ghcr.io`。不要把有写权限的令牌放到服务器。
-3. 选择一个完整镜像标签。CI 会推送 `latest` 和 `sha-<完整提交号>`；建议先用 SHA 标签做测试，避免未来 `latest` 更新造成不可预期变化。
+1. 查看 GitHub Actions 中最近一次 `Validate and publish fork images` 运行，确认验证及前后端发布任务都成功。正常推送到 `main` 会自动触发该工作流；只有需要重跑时才手动 dispatch。
+2. 本文更新时，`flux-panel-backend` 和 `flux-panel-frontend` 均已通过匿名拉取检查。若之后更改了 GHCR 包可见性，服务器无登录时必须把两个包设为 Public；如保持 Private，则先在服务器配置仅有读取权限的 GitHub 凭据并使用 `docker login ghcr.io`。不要把有写权限的令牌放到服务器。
+3. 选择与成功发布的工作流提交号对应的完整镜像标签 `sha-<完整提交号>`；不要仅依赖可变的 `latest`。部署前可在测试机执行 `docker compose ... pull`，确认目标标签可拉取。
 4. 确认当前部署目录、Compose 文件、`.env`、Docker 卷名和数据库版本。当前 fork 代码基于仓库中的数据库结构；如果线上系统版本更旧或有本地改动，不能直接假设 schema 兼容。先在隔离测试机恢复一份备份副本，验证启动和数据读写；不要在生产库手动套用 `gost.sql`（它是新库初始化脚本，不是迁移脚本）。
 5. 预留维护窗口。停服时间至少覆盖数据库导出、容器替换及健康检查。
 
@@ -81,6 +81,6 @@ docker compose -f backup-before-fork-migration/docker-compose.yml up -d --pull n
 
 ## gost 节点二进制
 
-新的 `gost-latest` 发布工作流可以构建 Linux AMD64/ARM64 并生成 SHA-256 文件。**首次启用时需在 GitHub Actions 中手动运行 `Build gost release assets`，并确认 release 资产齐全。** 新安装脚本会严格要求匹配的校验和；没有完成首次发布前，不要用新 `install.sh` 更新正在运行的节点。验证方式是先在一台测试节点安装、确认 `gost -V` 和节点心跳后，再分批迁移节点。
+fork 的 [`gost-latest` Release](https://github.com/shanlianyun/flux-panel/releases/tag/gost-latest) 已发布 Linux AMD64/ARM64 二进制及对应 SHA-256 文件，并保留兼容旧脚本的 `gost`/`gost.sha256` 资产；已下载核对当前三个二进制的校验和。修改 `go-gost` 源码后，在 GitHub Actions 手动运行 `Build gost release assets` 更新这些资产。新安装脚本会严格要求匹配的校验和；在测试节点验证安装、`gost -V` 和节点心跳前，不要用新 `install.sh` 更新正在运行的节点，再分批迁移节点。
 
 安装器默认直连 GitHub，不再根据 IP 地理定位自动将二进制和配置下载请求转交给第三方代理。如网络环境必须使用镜像，请显式设置 `GITHUB_MIRROR_PREFIX`，只使用你信任的服务。
