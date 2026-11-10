@@ -153,7 +153,7 @@ public class FlowController extends BaseController {
         }
 
         // 记录日志
-        log.debug("节点上报流量数据{}", flowDataList);
+        log.debug("收到节点流量上报");
         // 4. 处理流量数据
         return processFlowData(flowDataList);
     }

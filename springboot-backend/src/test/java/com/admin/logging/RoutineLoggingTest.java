@@ -101,21 +101,46 @@ class RoutineLoggingTest {
         assertEquals("ok", controller.uploadFlowData("{\"n\":\"100_20_0_tcp\",\"d\":100,\"u\":200}", "node-secret"));
         assertTrue(events.list.stream().anyMatch(event -> event.getLevel() == Level.DEBUG));
         assertTrue(events.list.stream().noneMatch(event -> event.getLevel().isGreaterOrEqual(Level.INFO)));
+        assertTrue(events.list.stream().noneMatch(event -> event.getFormattedMessage().contains("FlowDto(") ||
+                event.getFormattedMessage().contains("node-secret")));
     }
 
     @Test
-    void administrativeRequestsStillLogAtInfo() {
-        assertEquals("saved", proxy(new AdministrativeController()).save());
-        assertTrue(events.list.stream().anyMatch(event -> event.getLevel() == Level.INFO));
+    void successfulAdministrativeRequestsDoNotLogBodiesAtInfo() {
+        assertEquals("response-secret", proxy(new AdministrativeController()).save("request-secret"));
+        assertTrue(events.list.stream().noneMatch(event -> event.getLevel() == Level.INFO));
+        assertTrue(events.list.stream().noneMatch(event -> event.getFormattedMessage().contains("request-secret") ||
+                event.getFormattedMessage().contains("response-secret")));
     }
 
     @Test
-    void interfaceBasedAdministrativeProxyStillLogsWithoutBreakingTheRequest() {
+    void interfaceBasedAdministrativeProxyDoesNotLogBodiesAtInfo() {
         AspectJProxyFactory factory = new AspectJProxyFactory(new AdministrativeImplementation());
         factory.addAspect(new LogAspect());
         AdministrativeEndpoint endpoint = factory.getProxy();
-        assertEquals("saved", endpoint.save());
-        assertTrue(events.list.stream().anyMatch(event -> event.getLevel() == Level.INFO));
+        assertEquals("response-secret", endpoint.save("request-secret"));
+        assertTrue(events.list.stream().noneMatch(event -> event.getLevel() == Level.INFO));
+        assertTrue(events.list.stream().noneMatch(event -> event.getFormattedMessage().contains("request-secret") ||
+                event.getFormattedMessage().contains("response-secret")));
+    }
+
+    @Test
+    void debugRequestLogsContainMetadataButNotPayloads() {
+        Logger logger = (Logger) LoggerFactory.getLogger(LogAspect.class);
+        logger.setLevel(Level.DEBUG);
+        assertEquals("response-secret", proxy(new DebugAdministrativeController()).save("request-secret"));
+        assertTrue(events.list.stream().anyMatch(event -> event.getLevel() == Level.DEBUG));
+        assertTrue(events.list.stream().allMatch(event -> !event.getFormattedMessage().contains("request-secret") &&
+                !event.getFormattedMessage().contains("response-secret")));
+        assertTrue(events.list.stream().anyMatch(event -> event.getFormattedMessage().contains("save")));
+    }
+
+    @Test
+    void failureLogsRemainVisibleWithoutRequestPayloads() {
+        assertThrows(IllegalStateException.class,
+                () -> proxy(new FailingAdministrativeController()).save("request-secret"));
+        assertTrue(events.list.stream().anyMatch(event -> event.getLevel().isGreaterOrEqual(Level.WARN)));
+        assertTrue(events.list.stream().noneMatch(event -> event.getFormattedMessage().contains("request-secret")));
     }
 
     @Test
@@ -133,6 +158,18 @@ class RoutineLoggingTest {
         when(session.getAttributes()).thenReturn(Map.of("id", "1", "type", "0"));
         new WebSocketServer().handleTextMessage(session, new TextMessage(payload));
         assertTrue(events.list.isEmpty());
+    }
+
+    @Test
+    void routineWebSocketDebugDiagnosticsOmitPayload() throws Exception {
+        Logger logger = (Logger) LoggerFactory.getLogger(WebSocketServer.class);
+        logger.setLevel(Level.DEBUG);
+        String payload = "{\"requestId\":\"private-request-id\",\"message\":\"private-payload\"}";
+        WebSocketSession session = mock(WebSocketSession.class);
+        when(session.getAttributes()).thenReturn(Map.of("id", "1", "type", "0"));
+        new WebSocketServer().handleTextMessage(session, new TextMessage(payload));
+        assertTrue(events.list.stream().noneMatch(event -> event.getFormattedMessage().contains("private-request-id") ||
+                event.getFormattedMessage().contains("private-payload")));
     }
 
     @Test
@@ -160,20 +197,34 @@ class RoutineLoggingTest {
 
     public static class AdministrativeController {
         @LogAnnotation
-        public String save() {
-            return "saved";
+        public String save(String request) {
+            return "response-secret";
+        }
+    }
+
+    public static class DebugAdministrativeController {
+        @LogAnnotation(debug = true)
+        public String save(String request) {
+            return "response-secret";
         }
     }
 
     public interface AdministrativeEndpoint {
-        String save();
+        String save(String request);
     }
 
     public static class AdministrativeImplementation implements AdministrativeEndpoint {
         @Override
         @LogAnnotation
-        public String save() {
-            return "saved";
+        public String save(String request) {
+            return "response-secret";
+        }
+    }
+
+    public static class FailingAdministrativeController {
+        @LogAnnotation
+        public String save(String request) {
+            throw new IllegalStateException("safe-error-detail");
         }
     }
 }

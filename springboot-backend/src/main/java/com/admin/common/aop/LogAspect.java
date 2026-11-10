@@ -1,23 +1,16 @@
 package com.admin.common.aop;
 
 
-import cn.hutool.core.util.ArrayUtil;
 import com.admin.common.utils.JwtUtil;
-import com.alibaba.fastjson.JSON;
 import com.admin.common.utils.HttpContextUtils;
 import com.admin.common.utils.IpUtils;
 import lombok.extern.slf4j.Slf4j;
 import org.aspectj.lang.JoinPoint;
 import org.aspectj.lang.annotation.*;
-import org.aspectj.lang.reflect.CodeSignature;
 import org.aspectj.lang.reflect.MethodSignature;
 import org.springframework.stereotype.Component;
 
 import javax.servlet.http.HttpServletRequest;
-import java.lang.reflect.Method;
-import java.util.Arrays;
-import java.util.HashMap;
-import java.util.Map;
 
 @Component
 @Aspect
@@ -45,9 +38,7 @@ public class LogAspect {
     @AfterReturning(value = "pt() && @annotation(annotation)", returning = "returnValue",
             argNames = "joinPoint,returnValue,annotation")
     public void log(JoinPoint joinPoint, Object returnValue, LogAnnotation annotation) throws Throwable {
-        boolean debug = annotation.debug();
-        // Avoid serializing frequent report payloads when diagnostic logging is disabled.
-        if (debug && !log.isDebugEnabled()) {
+        if (!annotation.debug() || !log.isDebugEnabled()) {
             return;
         }
         // 获取请求信息
@@ -75,23 +66,8 @@ public class LogAspect {
         String controllerMethod = className + "." + methodName;
         
 
-        // 获取请求参数
-        String requestParams = getRequestParams(joinPoint);
-        
-        // 获取返回参数
-        String responseParams = returnValue != null ? JSON.toJSONString(returnValue) : "无返回值";
-        
-        // 合并为一条完整的日志信息
-        String logMessage = String.format(
-            "【请求日志】用户ID:[%s], IP地址:[%s], 请求方式:[%s], 控制器方法:[%s], 请求参数:[%s], 返回参数:[%s]", user_id, ipAddr, requestMethod, controllerMethod, requestParams, responseParams
-        );
-        
-        // 打印单条完整日志
-        if (debug) {
-            log.debug(logMessage);
-        } else {
-            log.info(logMessage);
-        }
+        log.debug("【请求日志】用户ID:[{}], IP地址:[{}], 请求方式:[{}], 控制器方法:[{}]",
+                user_id, ipAddr, requestMethod, controllerMethod);
     }
 
 
@@ -125,7 +101,6 @@ public class LogAspect {
             
             // 获取方法签名信息
             MethodSignature signature = (MethodSignature) joinPoint.getSignature();
-            Method method = signature.getMethod();
             
             // 获取控制器方法名
             String className = joinPoint.getTarget().getClass().getName();
@@ -134,69 +109,18 @@ public class LogAspect {
             
 
             
-            // 获取请求参数
-            String requestParams = getRequestParams(joinPoint);
-            
             // 获取异常信息
             String exceptionMsg = ex != null ? ex.getMessage() : "未知异常";
             
             // 合并为一条完整的异常日志信息
             String errorMessage = String.format(
-                "【异常日志】用户ID:[%s], IP地址:[%s], 请求方式:[%s], 控制器方法:[%s], 请求参数:[%s], 异常信息:[%s]", user_id, ipAddr, requestMethod, controllerMethod, requestParams, exceptionMsg
+                "【异常日志】用户ID:[%s], IP地址:[%s], 请求方式:[%s], 控制器方法:[%s], 异常信息:[%s]", user_id, ipAddr, requestMethod, controllerMethod, exceptionMsg
             );
             
             // 打印单条完整异常日志
             log.warn(errorMessage, ex);
         } catch (Exception e) {
             log.warn("记录异常日志时出错: {}", e.getMessage());
-        }
-    }
-    
-    /**
-     * 获取请求参数
-     */
-    private String getRequestParams(JoinPoint joinPoint) {
-        try {
-            Object[] args = joinPoint.getArgs();
-            if (args.length == 0) {
-                return "无参数";
-            } else if (args[0] != null && args[0].toString().contains("SecurityContextHolderAwareRequestWrapper")) {
-                return JSON.toJSONString(Arrays.toString(ArrayUtil.remove(args, 0)));
-            } else {
-                // 检查是否只有一个参数且已经是JSON字符串格式
-                if (args.length == 1 && args[0] != null) {
-                    // 如果参数本身就是字符串且是JSON格式，直接返回
-                    if (args[0] instanceof String && ((String) args[0]).startsWith("{") && ((String) args[0]).endsWith("}")) {
-                        return (String) args[0];
-                    }
-                    
-                    // 如果参数是普通对象，直接序列化
-                    try {
-                        return JSON.toJSONString(args[0]);
-                    } catch (Exception e) {
-                        // 如果序列化失败，再尝试使用参数名映射
-                        Map<String, Object> map = new HashMap<>();
-                        String[] names = ((CodeSignature) joinPoint.getSignature()).getParameterNames();
-                        if (names != null) {
-                            map.put(names[0], args[0]);
-                            return JSON.toJSONString(map);
-                        }
-                        return JSON.toJSONString(args[0]);
-                    }
-                } else {
-                    // 多个参数时，使用参数名映射
-                    Map<String, Object> map = new HashMap<>();
-                    String[] names = ((CodeSignature) joinPoint.getSignature()).getParameterNames();
-                    if (names != null) {
-                        for (int i = 0; i < names.length; i++) {
-                            map.put(names[i], args[i]);
-                        }
-                    }
-                    return JSON.toJSONString(map);
-                }
-            }
-        } catch (Exception e) {
-            return "获取参数失败: " + e.getMessage();
         }
     }
 }
