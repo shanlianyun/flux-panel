@@ -1,15 +1,20 @@
 # 常见问题
 
 
-## 旧版面板管理脚本（已有部署）
+## 面板安装、迁移与更新
 
-下面的 `panel_install.sh` 和默认 Compose 文件继续使用原作者 Docker Hub 镜像，仅用于已有部署的原有维护流程。新部署请使用[快速开始](/getting-started)中的 fork GHCR 部署方式；现有系统切换请先阅读[迁移指南](https://github.com/shanlianyun/flux-panel/blob/main/docs/migrate-from-original.md)。不要用旧版脚本的“更新”选项切换到 fork。
-
-安装、更新、卸载面板均使用同一条命令，运行后在菜单中选择对应操作：
+安装、旧版迁移和后续更新使用同一个管理菜单。服务器上执行：
 
 ```bash
-curl -L https://raw.githubusercontent.com/shanlianyun/flux-panel/refs/heads/main/panel_install.sh -o panel_install.sh && chmod +x panel_install.sh && ./panel_install.sh
+curl --fail --location --retry 3 https://raw.githubusercontent.com/shanlianyun/flux-panel/main/panel_install.sh -o panel_install.sh && bash panel_install.sh
 ```
+
+- 新安装选 `1`，必须使用专用空目录。
+- 原作者版本迁移选 `7`，并核对旧部署目录；不要先卸载或删除数据卷。
+- fork 后续更新选 `2`。该选项不会自动迁移旧版。
+- 单独备份选 `4`；恢复中断的迁移/更新选 `8`。
+
+需要 Python 3.8+ 和 Docker Compose v2。迁移指南说明[支持范围、备份及失败恢复](https://github.com/shanlianyun/flux-panel/blob/main/docs/migrate-from-original.md)。如果系统结构或运行配置不受支持，菜单会停止，不要通过重新安装绕过检查。
 
 ## 节点管理脚本
 
