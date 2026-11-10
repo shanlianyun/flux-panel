@@ -13,9 +13,49 @@
 - **存储**: 至少 1GB 可用空间
 - **网络**: 确保相关端口未被占用
 
-## 使用 fork 自有镜像部署（推荐）
+## 一键安装或迁移（推荐）
 
-新部署请使用本 fork 的 GHCR 镜像和专用 Compose 文件，不要使用下方旧版交互式安装器。部署前在 GitHub Actions 确认最近一次 `Validate and publish fork images` 的验证、前后端镜像发布任务均成功，并将 `IMAGE_TAG` 设置为该次提交的完整 `sha-<提交号>` 标签。当前前后端镜像可匿名拉取。
+在服务器执行这一条命令，打开 Flux Panel 管理菜单：
+
+```bash
+curl --fail --location --retry 3 https://raw.githubusercontent.com/shanlianyun/flux-panel/main/panel_install.sh -o panel_install.sh && bash panel_install.sh
+```
+
+需要 Bash、curl、Python 3.8+、Docker 和支持 `config --format json` 的 Docker Compose v2。建议从部署服务器本机运行；不支持远程 Docker endpoint 或旧版 `docker-compose` v1。
+
+### 全新安装
+
+选择菜单 **`1. 安装本 fork`**，并使用专用空目录。脚本会生成随机数据库密码和 JWT 密钥，使用对应提交的不可变镜像标签。若发现现有 Compose 文件、容器、数据卷或项目，会停止而不会覆盖旧部署。
+
+### 从原作者版本迁移
+
+选择菜单 **`7. 旧版迁移到本 fork`**。脚本会尝试从后端容器的 Compose 标签找到原部署目录；核对路径无误后，在目录提示处按回车，或输入原路径。原部署目录通常包含 `docker-compose.yml`、`.env` 和 `gost.sql`。例如可用以下命令查看 Compose 记录的路径：
+
+```bash
+docker inspect --format '{{index .Config.Labels "com.docker.compose.project.working_dir"}}' springboot-backend
+```
+
+建议先保护含数据库凭据的 `.env` 文件：
+
+```bash
+chmod 600 /原部署目录/.env
+```
+
+迁移前会检查支持范围、数据库结构及可用磁盘空间，备份配置和数据库，并先拉取前后端镜像；确认后才替换前后端容器。会保留原端口、网络、数据卷、凭据及其他服务，不自动修改数据库结构、重启 MySQL/Docker 或更新节点。若检查不通过会停止，不要改选“卸载”或“全新安装”来绕过。
+
+### 后续更新与恢复
+
+- 已迁移的系统选择 **`2. 更新本 fork`**。普通更新不会自动把原作者版本切换到 fork。
+- **`4. 导出数据库与配置备份`**可单独备份；**`8. 恢复中断的迁移/更新`**会尝试恢复旧容器和配置，不会自动回灌数据库。
+- 菜单会保留在服务器上，下次可运行 `bash panel_install.sh` 再次打开。
+
+镜像默认使用 `main` 当前提交对应的完整 `sha-<40位提交号>` 标签。也可通过 `PANEL_IMAGE_TAG=sha-<完整提交号>` 指定已发布版本。迁移只支持常见的单文件 Compose v2、MySQL 5.7/InnoDB 及标准服务；这不是任意旧数据库的自动升级器。建议先在隔离副本测试，并安排维护时间。
+
+失败时会尝试回退容器与配置，不会自动覆盖数据库。基础健康检查不能替代登录、WebSocket、节点心跳、隧道及流量验证。备份包含敏感数据库信息，应另存到服务器外。完整支持范围和恢复说明见[原作者版本迁移指南](https://github.com/shanlianyun/flux-panel/blob/main/docs/migrate-from-original.md)。
+
+## 高级：手动使用 fork 镜像部署
+
+若需要自定义 Compose 部署，可以手动使用 fork 的 GHCR 镜像和专用 Compose 文件。部署前确认 GitHub Actions 最近一次 `Validate and publish fork images` 的验证、前后端镜像发布均成功，并将 `IMAGE_TAG` 设置为对应完整提交号的 `sha-<40位提交号>` 标签。当前镜像可匿名拉取。
 
 在新目录下载初始化 SQL 和 IPv4 Compose 文件：
 
@@ -51,53 +91,11 @@ docker compose --env-file compose-fork.env -f docker-compose-fork-v4.yml up -d
 docker compose --env-file compose-fork.env -f docker-compose-fork-v4.yml ps
 ```
 
-IPv6 环境下载 `docker-compose-fork-v6.yml` 替代 v4 文件，并在下面命令中相应替换 Compose 文件名。`gost.sql` 只会在全新数据库卷初始化时执行；不要把这些新部署步骤直接用于已有数据库。原作者版本迁移请先阅读[迁移指南](https://github.com/shanlianyun/flux-panel/blob/main/docs/migrate-from-original.md)，在隔离测试环境用备份副本验证后再安排生产维护窗口。
+IPv6 环境下载 `docker-compose-fork-v6.yml` 替代 v4 文件，并在下面命令中相应替换 Compose 文件名。`gost.sql` 只会在全新数据库卷初始化时执行；不要把这些新部署步骤直接用于已有数据库。已有原作者部署请使用上方菜单显式迁移，或先阅读[迁移指南](https://github.com/shanlianyun/flux-panel/blob/main/docs/migrate-from-original.md)。
 
 首次登录后立即修改默认管理员密码，并配置防火墙，仅开放所需的前端及转发端口。fork Compose 不会将后端 API 或数据库端口映射到宿主机。
 
-## 旧版交互式安装（仅兼容已有部署）
-
-以下 `panel_install.sh` 和默认 Compose 文件仍引用原作者 Docker Hub 镜像，仅供已有原作者部署延续原有安装、更新和卸载操作。**不要将它用于新的 fork 部署，也不要把其更新选项当作迁移步骤。**
-
-```bash
-curl -L https://raw.githubusercontent.com/shanlianyun/flux-panel/refs/heads/main/panel_install.sh -o panel_install.sh && chmod +x panel_install.sh && ./panel_install.sh
-```
-
-### 旧版安装流程说明
-
-1. **运行脚本后选择操作**：
-   ```
-   ===============================================
-             面板管理脚本
-   ===============================================
-   请选择操作：
-   1. 安装面板      ← 选择这个
-   2. 更新面板
-   3. 卸载面板
-   4. 退出
-   ===============================================
-   ```
-
-2. **输入配置参数**：
-   - **面板服务器地址**: 需要节点服务器能正常访问的地址
-   - **前端端口**: 默认 6366
-   - **后端端口**: 默认 6365
-
-3. **自动化处理**：
-   - 检测 Docker 环境
-   - 自动检测 IPv6 支持并选择合适的配置
-   - 生成随机的数据库配置
-   - 下载并启动服务
-
-### 配置示例
-
-```bash
-当前面板服务器地址: 192.168.1.100  # 或您的公网IP
-前端端口（默认 6366）: 6366         # 直接回车使用默认值
-后端端口（默认 6365）: 6365         # 直接回车使用默认值
-```
-
-## 验证旧版交互式安装
+## 验证部署
 
 ### 1. 检查服务状态
 
@@ -112,7 +110,7 @@ docker compose ps
 您应该看到以下服务都处于 `Up` 状态：
 - `gost-mysql` - 数据库服务
 - `springboot-backend` - 后端 API 服务
-- `vue-frontend` - 前端 Web 界面
+- `vite-frontend` - 前端 Web 界面
 
 ### 2. 访问 Web 界面
 
@@ -128,21 +126,7 @@ docker compose ps
 
 ## IPv6 支持
 
-脚本会自动检测系统的 IPv6 支持：
-
-- ✅ **支持 IPv6**: 自动使用 IPv6 配置文件并配置 Docker IPv6 支持
-- ⚠️ **不支持 IPv6**: 使用 IPv4 配置文件
-
-### Docker IPv6 配置
-
-如果检测到 IPv6 支持，脚本会自动配置：
-
-```json
-{
-  "ipv6": true,
-  "fixed-cidr-v6": "fd00::/80"
-}
-```
+新建双栈部署时，请按实际网络状况手动选择 `docker-compose-fork-v4.yml` 或 `docker-compose-fork-v6.yml`。管理菜单不会自动修改 Docker daemon 的 IPv6 设置。迁移现有部署时会保留原 Compose 网络配置；若网络状态与配置不符，则停止迁移。
 
 ## 端口说明
 
