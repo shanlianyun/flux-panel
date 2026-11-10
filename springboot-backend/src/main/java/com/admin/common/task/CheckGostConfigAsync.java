@@ -5,7 +5,6 @@ import com.admin.common.lang.R;
 import com.admin.common.utils.GostUtil;
 import com.admin.entity.*;
 import com.admin.service.*;
-import com.alibaba.fastjson.JSONObject;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Lazy;
@@ -43,7 +42,7 @@ public class CheckGostConfigAsync {
      */
     @Async
     public void cleanNodeConfigs(String node_id, GostConfigDto gostConfig) {
-        System.out.println(JSONObject.toJSONString(gostConfig));
+        log.debug("Checking reported configuration for node {}", node_id);
         Node node = nodeService.getById(node_id);
         if (node != null) {
             cleanOrphanedServices(gostConfig, node);
@@ -76,7 +75,7 @@ public class CheckGostConfigAsync {
                             if (forward == null) {
                                 log.info("删除孤立的服务: {} (节点: {})", service.getName(), node.getId());
                                 GostDto gostDto = GostUtil.DeleteService(node.getId(), forwardId + "_" + userId + "_" + userTunnelId);
-                                System.out.println(gostDto);
+                                log.debug("Orphaned service cleanup result: {}", gostDto);
                             }
                         }
 
@@ -175,7 +174,7 @@ public class CheckGostConfigAsync {
                 }
                 List<Long> diff = new ArrayList<>(speedLimits_ids);
                 diff.removeAll(limiters_ids);
-                System.out.println(diff);
+                log.debug("Missing limiter IDs: {}", diff);
                 if (!diff.isEmpty()) {
 
                     for (Long speed_id : diff) {

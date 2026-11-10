@@ -42,8 +42,14 @@ public class LogAspect {
      * @param returnValue 返回值
      * @throws Exception
      */
-    @AfterReturning(value = "pt()", returning = "returnValue")
-    public void log(JoinPoint joinPoint, Object returnValue) throws Throwable {
+    @AfterReturning(value = "pt() && @annotation(annotation)", returning = "returnValue",
+            argNames = "joinPoint,returnValue,annotation")
+    public void log(JoinPoint joinPoint, Object returnValue, LogAnnotation annotation) throws Throwable {
+        boolean debug = annotation.debug();
+        // Avoid serializing frequent report payloads when diagnostic logging is disabled.
+        if (debug && !log.isDebugEnabled()) {
+            return;
+        }
         // 获取请求信息
         HttpServletRequest request = HttpContextUtils.getHttpServletRequest();
         
@@ -62,7 +68,6 @@ public class LogAspect {
         
         // 获取方法签名信息
         MethodSignature signature = (MethodSignature) joinPoint.getSignature();
-        Method method = signature.getMethod();
         
         // 获取控制器方法名
         String className = joinPoint.getTarget().getClass().getName();
@@ -82,7 +87,11 @@ public class LogAspect {
         );
         
         // 打印单条完整日志
-        log.info(logMessage);
+        if (debug) {
+            log.debug(logMessage);
+        } else {
+            log.info(logMessage);
+        }
     }
 
 
@@ -137,9 +146,9 @@ public class LogAspect {
             );
             
             // 打印单条完整异常日志
-            log.info(errorMessage, ex);
+            log.warn(errorMessage, ex);
         } catch (Exception e) {
-            log.info("记录异常日志时出错: {}", e.getMessage());
+            log.warn("记录异常日志时出错: {}", e.getMessage());
         }
     }
     

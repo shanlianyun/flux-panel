@@ -36,9 +36,22 @@ jobs:
           java-version: '21'
           cache: maven
 
-      - name: Test node reconnect rule recovery
+      - name: Test node recovery and bounded logging
         working-directory: springboot-backend
-        run: mvn --batch-mode --no-transfer-progress -Dtest=NodeReconnectSyncTest test
+        run: mvn --batch-mode --no-transfer-progress -Dtest=NodeReconnectSyncTest,LoggingPolicyTest,ComposeLoggingTest,RoutineLoggingTest test
+
+      - name: Validate Compose configurations
+        env:
+          DB_NAME: compose_validation
+          DB_USER: compose_validation
+          DB_PASSWORD: compose_validation_only
+          JWT_SECRET: compose_validation_only
+          BACKEND_PORT: '6365'
+          FRONTEND_PORT: '6366'
+        run: |
+          for config in docker-compose-v4.yml docker-compose-v6.yml docker-compose-fork-v4.yml docker-compose-fork-v6.yml; do
+            docker compose -f "$config" config --quiet
+          done
 
       - name: Compile backend
         working-directory: springboot-backend
