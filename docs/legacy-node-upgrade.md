@@ -21,7 +21,7 @@ curl --fail --location --retry 3 https://raw.githubusercontent.com/shanlianyun/f
 
 检查该节点实际承担的 TCP/UDP、入口/出口转发，以及暂停、恢复、节点重启后暂停状态。再仅断开测试面板控制通道，验证已有连接与新连接继续转发；面板恢复后验证自动重连和有效规则同步。全部通过再逐台升级，避免同时重启所有入口/出口节点。
 
-若要迁移到 HTTPS/WSS，先配置有效证书及反向代理，再通过 `GOST_PANEL_SCHEME=https bash flux-node.sh` 打开同一个菜单选 `2`。不要修改地址字段来粘贴带协议的完整 URL。旧节点全部迁移验证后，才可关闭旧 HTTP/WS 通道。
+若要迁移到 HTTPS/WSS，先配置有效证书及反向代理，再通过 `GOST_PANEL_SCHEME=https bash flux-node.sh` 打开同一个菜单选 `2`。此处是已有节点的维护方式：`/etc/gost/config.json` 的 `addr` 仍保存不带协议的地址；不要直接把完整 URL 写入该文件。面板“节点连接地址”则应保存带 `http://` 或 `https://` 的完整入口，供以后生成新安装命令，复制的命令会自动拆分协议与地址。修改面板设置不会自动改变已有节点。旧节点全部迁移验证后，才可关闭旧 HTTP/WS 通道。
 
 ## 有限兼容，不误启用暂停规则
 

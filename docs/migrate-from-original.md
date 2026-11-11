@@ -127,7 +127,7 @@ fork 的 [`gost-latest` Release](https://github.com/shanlianyun/flux-panel/relea
 
 安装器默认直连 GitHub，不再根据 IP 地理定位自动将二进制和配置下载请求转交给第三方代理。如网络环境必须使用镜像，请显式设置 `GITHUB_MIRROR_PREFIX`，只使用你信任的服务。
 
-安全部署节点时，先为面板配置有效 TLS 证书和反向代理，再使用 `GOST_PANEL_SCHEME=https ./install.sh`（或更新前导出该变量）。旧的 HTTP/WS 模式仅用于受控内网兼容，不能作为公网安全配置。
+安全部署新节点时，先为面板配置有效 TLS 证书和 WebSocket 反向代理，在“网站配置 → 节点连接地址”保存 `https://节点入口域名:443`，再从节点记录复制完整安装命令；命令自动携带协议，无需另设环境变量。`GOST_PANEL_SCHEME=https bash flux-node.sh` 仅用于地址已对应 TLS 入口的已有节点切换协议，菜单选 `2` 更新，不要重装。旧 HTTP/WS 通道在旧节点逐台迁移验证前必须保留，但不能作为公网安全配置。
 
 ### 面板维护时的节点可用性
 

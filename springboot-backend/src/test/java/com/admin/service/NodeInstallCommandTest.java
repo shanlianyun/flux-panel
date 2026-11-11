@@ -8,7 +8,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.test.util.ReflectionTestUtils;
 
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
@@ -20,10 +19,9 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
 class NodeInstallCommandTest {
-    @TempDir
-    Path temporary;
+    @TempDir Path temporary;
 
-    private String command(String address, String secret) {
+    static R response(String address, String secret) {
         NodeServiceImpl service = spy(new NodeServiceImpl());
         Node node = new Node();
         node.setId(1L);
@@ -34,109 +32,90 @@ class NodeInstallCommandTest {
         ViteConfigService configs = mock(ViteConfigService.class);
         when(configs.getOne(any())).thenReturn(config);
         ReflectionTestUtils.setField(service, "viteConfigService", configs);
-        R result = service.getInstallCommand(1L);
-        assertEquals(0, result.getCode());
+        return service.getInstallCommand(1L);
+    }
+
+    private String command(String endpoint, String secret) {
+        R result = response(endpoint, secret);
+        assertEquals(0, result.getCode(), result.getMsg());
         return (String) result.getData();
     }
 
-    private int execute(String command, String downloader) throws Exception {
-        return execute(command, downloader, 0);
-    }
-
-    private int execute(String command, String downloader, int installerStatus) throws Exception {
+    private int execute(String command, int downloadStatus, int installStatus) throws Exception {
         Path bin = Files.createDirectories(temporary.resolve("bin"));
+        Path installer = temporary.resolve("downloaded.sh");
+        Path payload = temporary.resolve("payload");
+        Files.writeString(payload, "#!/bin/bash\nprintf '%s\\0' \"$@\" > \"$CAPTURE\"\nexit \"$INSTALL_STATUS\"\n");
         Path curl = bin.resolve("curl");
-        Files.writeString(curl, "#!/bin/bash\n" + downloader);
+        Files.writeString(curl, "#!/bin/bash\ncp \"$PAYLOAD\" \"$DOWNLOADED\"\nexit \"$DOWNLOAD_STATUS\"\n");
         assertTrue(curl.toFile().setExecutable(true));
-        Path fixture = temporary.resolve("downloaded.sh");
-        Files.writeString(fixture, "#!/bin/bash\nprintf '%s\\0' \"$@\" > \"$CAPTURE\"\n"
-                + "printf '%s' \"${GOST_PANEL_SCHEME:-http}\" > \"$SCHEME_CAPTURE\"\n"
-                + "exit \"${INSTALL_STATUS:-0}\"\n");
-        Path scratch = Files.createDirectories(temporary.resolve("scratch"));
+        // Redirect only the managed /root script location; execute the copied shell unchanged.
+        Path bash = bin.resolve("bash");
+        Files.writeString(bash, "#!/bin/bash\nif [[ $1 == /root/flux-node.sh ]]; then shift; exec /bin/bash \"$DOWNLOADED\" \"$@\"; fi\nexit 99\n");
+        assertTrue(bash.toFile().setExecutable(true));
         ProcessBuilder builder = new ProcessBuilder("/bin/sh", "-c", command)
                 .directory(temporary.toFile()).redirectErrorStream(true)
                 .redirectOutput(temporary.resolve("output.log").toFile());
         builder.environment().put("PATH", bin + ":" + System.getenv("PATH"));
-        builder.environment().put("FIXTURE", fixture.toString());
+        builder.environment().put("PAYLOAD", payload.toString());
+        builder.environment().put("DOWNLOADED", installer.toString());
         builder.environment().put("CAPTURE", temporary.resolve("args").toString());
-        builder.environment().put("SCHEME_CAPTURE", temporary.resolve("scheme").toString());
-        builder.environment().put("GOST_PANEL_SCHEME", "https");
-        builder.environment().put("INSTALL_STATUS", Integer.toString(installerStatus));
-        builder.environment().put("TMPDIR", scratch.toString());
-        builder.environment().put("BOOTSTRAP_FIXTURE", Path.of("..", "node.sh").toAbsolutePath().normalize().toString());
+        builder.environment().put("DOWNLOAD_STATUS", Integer.toString(downloadStatus));
+        builder.environment().put("INSTALL_STATUS", Integer.toString(installStatus));
+        builder.environment().put("GOST_PANEL_SCHEME", "http");
         Process process = builder.start();
         if (!process.waitFor(10, TimeUnit.SECONDS)) {
             process.destroyForcibly();
-            fail("Install command timed out");
-        }
-        try (var files = Files.list(scratch)) {
-            assertEquals(0, files.count(), "Temporary installer was not cleaned up");
+            fail("Copied command timed out");
         }
         return process.exitValue();
     }
 
-    private static final String STREAM_FIXTURE = "if [[ \"$*\" == *'/node.sh'* ]]; then cat \"$BOOTSTRAP_FIXTURE\"; exit; fi\n"
-            + "output=''\n"
-            + "while [[ $# -gt 0 ]]; do\n"
-            + "case \"$1\" in -o) output=\"$2\"; shift 2 ;; *) shift ;; esac\ndone\n"
-            + "if [[ -n \"$output\" ]]; then cp \"$FIXTURE\" \"$output\"; else cat \"$FIXTURE\"; fi\n";
-
     @Test
-    void copiedCommandFitsOneShortLine() {
-        String command = command("panel.example.com:443", "0123456789abcdef0123456789abcdef");
-        assertFalse(command.contains("\n"));
-        assertTrue(command.length() <= 240, "Install command still has " + command.length() + " characters");
+    void copiedCommandIsOrdinaryDownloadAndDirectExecution() {
+        String command = command("https://panel.example.com:443", "test-only");
+        assertTrue(command.startsWith("curl -fsSL --retry 3 "));
+        assertTrue(command.contains(" -o /root/flux-node.sh && bash /root/flux-node.sh install "));
+        assertFalse(command.contains("printf"));
+        assertFalse(command.contains("bash -c"));
+        assertFalse(command.contains("|"));
     }
 
     @Test
-    void passesAddressAndSecretAsLiteralArgumentsAndKeepsHttps() throws Exception {
+    void httpsAndSecretAreLiteralArgumentsWithoutExternalEnvironmentSetup() throws Exception {
         String secret = "test'$(touch injected); secret";
-        assertEquals(0, execute(command("panel.example.com:443", secret), STREAM_FIXTURE));
-        String captured = Files.readString(temporary.resolve("args"), StandardCharsets.UTF_8);
-        List<String> args = Arrays.asList(captured.split("\u0000"));
-        assertEquals(List.of("install", "-a", "panel.example.com:443", "-s", secret), args);
-        assertEquals("https", Files.readString(temporary.resolve("scheme")));
+        assertEquals(0, execute(command("https://panel.example.com/", secret), 0, 0));
+        List<String> args = Arrays.asList(Files.readString(temporary.resolve("args")).split("\u0000"));
+        assertEquals(List.of("install", "-a", "https://panel.example.com:443", "-s", secret), args);
         assertFalse(Files.exists(temporary.resolve("injected")));
     }
 
     @Test
-    void bracketsBareIpv6Address() throws Exception {
-        assertEquals(0, execute(command("2001:db8::1:6365", "test-only"), STREAM_FIXTURE));
-        String captured = Files.readString(temporary.resolve("args"), StandardCharsets.UTF_8);
-        assertEquals("[2001:db8::1]:6365", captured.split("\u0000")[2]);
+    void explicitHttpAndBracketedIpv6ArePreserved() throws Exception {
+        assertEquals(0, execute(command("http://[2001:db8::1]:6365", "test-only"), 0, 0));
+        assertEquals("http://[2001:db8::1]:6365", Files.readString(temporary.resolve("args")).split("\u0000")[2]);
     }
 
     @Test
-    void emptyDownloadFailureCannotLookLikeSuccess() throws Exception {
-        assertNotEquals(0, execute(command("panel.example.com:443", "test-only"), "exit 22\n"));
+    void completeFileWithTransferFailureCannotStartInstallation() throws Exception {
+        assertEquals(18, execute(command("https://panel.example.com", "test-only"), 18, 0));
         assertFalse(Files.exists(temporary.resolve("args")));
     }
 
     @Test
     void installerFailureIsPreserved() throws Exception {
-        assertEquals(23, execute(command("panel.example.com:443", "test-only"), STREAM_FIXTURE, 23));
+        assertEquals(23, execute(command("https://panel.example.com", "test-only"), 0, 23));
     }
 
     @Test
-    void truncatedBootstrapCannotStartInstaller() throws Exception {
-        assertNotEquals(0, execute(command("panel.example.com:443", "test-only"),
-                "sed '$d' \"$BOOTSTRAP_FIXTURE\"\nexit 18\n"));
-        assertFalse(Files.exists(temporary.resolve("args")));
-    }
-
-    @Test
-    void completeBootstrapFollowedByDownloadFailureCannotStartInstaller() throws Exception {
-        String downloader = STREAM_FIXTURE.replace("cat \"$BOOTSTRAP_FIXTURE\"; exit;",
-                "cat \"$BOOTSTRAP_FIXTURE\"; exit 18;");
-        assertNotEquals(0, execute(command("panel.example.com:443", "test-only"), downloader));
-        assertFalse(Files.exists(temporary.resolve("args")), "Failed download started installation");
-    }
-
-    @Test
-    void missingFinalNewlineAndDownloadFailureCannotStartInstaller() throws Exception {
-        String downloader = STREAM_FIXTURE.replace("cat \"$BOOTSTRAP_FIXTURE\"; exit;",
-                "printf %s \"$(cat \"$BOOTSTRAP_FIXTURE\")\"; exit 18;");
-        assertNotEquals(0, execute(command("panel.example.com:443", "test-only"), downloader));
-        assertFalse(Files.exists(temporary.resolve("args")), "Failed download started installation");
+    void ambiguousOrInvalidEndpointsCannotGenerateSilentlyWrongCommands() {
+        for (String endpoint : List.of("panel.example.com:443", "127.0.0.1:6365", "",
+                "ftp://panel.example.com", "https://user:password@panel.example.com",
+                "https://panel.example.com/api", "https://panel.example.com?token=secret",
+                "https://panel.example.com/#fragment", "https://panel.example.com:65536")) {
+            R result = response(endpoint, "test-only");
+            assertNotEquals(0, result.getCode(), endpoint);
+            assertNull(result.getData(), endpoint);
+        }
     }
 }
