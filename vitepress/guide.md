@@ -89,13 +89,16 @@ http://your-server-ip:6366
 在目标服务器上执行复制的安装命令：
 
 ```bash
-# 示例安装命令（实际命令请从面板复制）
-curl -L https://your-panel-server:6365/agent/install | bash -s -- --server=your-panel-server:6365 --token=your-node-token
+# 示例：实际安装命令请从面板复制
+# 面板生成的命令会下载临时 install.sh，执行 install 子命令后自动清理
+curl --fail --location --retry 3 https://raw.githubusercontent.com/shanlianyun/flux-panel/main/install.sh -o /tmp/flux-panel-install.sh && chmod 700 /tmp/flux-panel-install.sh && /tmp/flux-panel-install.sh install -a 'your-panel-server:6365' -s 'your-node-secret'; rm -f /tmp/flux-panel-install.sh
 ```
 
 ::: warning 安装须知
-- 安装或者更新时如果 `/etc/gost/` 下存在 `gost.json`，安装命令会跳过生成，使用当前存在的配置
-- gost执行文件会强制更新
+- `install` 用于新节点，会创建 `/etc/gost/config.json`；已有节点请使用 `./install.sh update`
+- `update` 会先校验 SHA-256 和可执行版本，只替换 gost 二进制，不覆盖 `config.json`、`gost.json`
+- 更新会让 GOST 短暂重启，建议先灰度一台节点，再滚动更新
+- 公网面板请使用 `GOST_PANEL_SCHEME=https`，启用 HTTPS/WSS 控制通道
 :::
 
 ### 验证安装
@@ -103,6 +106,8 @@ curl -L https://your-panel-server:6365/agent/install | bash -s -- --server=your-
 安装完成后，回到面板查看节点状态：
 - 节点状态应该变为 🟢 **在线**
 - 可以看到CPU使用率、内存使用率等系统信息
+
+面板短暂维护时，节点已经建立的转发仍由本地 GOST 继续提供；面板恢复后会自动重连并同步规则。
 
 ## 第五步：创建隧道
 

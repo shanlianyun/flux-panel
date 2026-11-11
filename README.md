@@ -94,6 +94,14 @@ curl --fail --location --retry 3 https://raw.githubusercontent.com/shanlianyun/f
 - **全新安装：选 `1`**，使用专用空目录；发现旧容器、数据卷或同名 Compose 项目就停止。
 - `4` 导出数据库/配置备份；`8` 恢复中断的迁移/更新。脚本不会再自动删除自己，之后可直接运行 `bash panel_install.sh`。
 
+管理脚本默认使用数字菜单，直接运行即可：
+
+```bash
+bash panel_install.sh
+```
+
+菜单中选择：`1` 全新安装、`2` 更新、`4` 备份、`7` 旧版迁移、`8` 恢复中断操作。命令行子命令仅供自动化维护。
+
 脚本检查数据库结构和剩余空间，先备份、拉取完整 `sha-提交号` 镜像，再只替换前后端；保留旧端口、网络、数据卷及其他服务，不重启 Docker、MySQL 或节点，不自动执行改表 SQL。目标镜像尚未发布、备份失败或部署不兼容时会停止。**这不是任意旧版本的通用升级器**；建议先在备份副本验证，正式切换需要短暂维护窗口。
 
 失败时会尝试回退原容器和配置，**绝不自动回灌数据库**。基础健康检查不代替登录、WebSocket、隧道和流量验证。完整支持范围、备份说明及高级手动方式见[迁移指南](docs/migrate-from-original.md)。
@@ -108,9 +116,15 @@ PANEL_IMAGE_TAG=sha-替换为40位完整提交号 bash panel_install.sh
 
 节点端：
 ```bash
-curl -L https://raw.githubusercontent.com/shanlianyun/flux-panel/refs/heads/main/install.sh -o install.sh && chmod +x install.sh && ./install.sh
+./install.sh
 
 ```
+
+面板“节点管理”页面会生成新节点的完整安装命令；已有节点运行脚本后在菜单中选择 `2. 更新`，不建议选择 `1. 安装`覆盖配置。脚本会校验 GOST 二进制、保留节点配置，并在更新失败时恢复旧版本；脚本本身不会自动删除。
+
+节点上报和控制通道默认保留 HTTP/WS 兼容旧部署；公网部署必须先配置面板 TLS 反向代理，再使用 `GOST_PANEL_SCHEME=https ./install.sh` 安装或更新节点，使节点使用 HTTPS/WSS。该变量会写入生成的 systemd 服务环境中。
+
+管理面板维护期间，节点上的 GOST 转发服务不会因为 WebSocket/HTTP 控制通道暂时断开而停止；节点会在面板恢复后自动重连并重新同步规则。维护窗口内不能通过面板执行新增、编辑、暂停或删除操作，节点本地已运行的规则仍继续提供服务。
 
 默认情况下安装脚本直接从 GitHub 下载，不会通过第三方代理，也不会向 IP 定位服务查询所在地。若你的网络必须经由可信镜像，可在运行前显式设置 `GITHUB_MIRROR_PREFIX`；请自行确认镜像服务的可信度。
 

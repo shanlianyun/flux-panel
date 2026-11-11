@@ -40,6 +40,12 @@ import (
 )
 
 func ParseService(cfg *config.ServiceConfig) (service.Service, error) {
+	if hasLifecycleHooks(cfg.Metadata) {
+		return nil, fmt.Errorf("lifecycle shell hooks are not permitted in service configuration")
+	}
+	if cfg.Metadata["paused"] == true {
+		return xservice.NewPausedService(cfg.Addr), nil
+	}
 	if cfg.Listener == nil {
 		cfg.Listener = &config.ListenerConfig{}
 	}
@@ -372,6 +378,27 @@ func ParseService(cfg *config.ServiceConfig) (service.Service, error) {
 
 	serviceLogger.Infof("listening on %s/%s", s.Addr().String(), s.Addr().Network())
 	return s, nil
+}
+
+func hasLifecycleHooks(metadata map[string]any) bool {
+	for _, key := range []string{"preUp", "preDown", "postUp", "postDown"} {
+		if value, ok := metadata[key]; ok {
+			switch v := value.(type) {
+			case nil:
+				continue
+			case string:
+				if strings.TrimSpace(v) == "" {
+					continue
+				}
+			default:
+				if fmt.Sprint(v) == "[]" || fmt.Sprint(v) == "" {
+					continue
+				}
+			}
+			return true
+		}
+	}
+	return false
 }
 
 func parseForwarder(cfg *config.ForwarderConfig, log logger.Logger) (hop.Hop, error) {

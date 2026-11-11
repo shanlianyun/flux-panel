@@ -114,11 +114,13 @@ func LoggerOption(logger logger.Logger) Option {
 }
 
 type defaultService struct {
-	name     string
-	listener listener.Listener
-	handler  handler.Handler
-	status   *Status
-	options  options
+	lifecycleMu sync.Mutex
+	closed      bool
+	name        string
+	listener    listener.Listener
+	handler     handler.Handler
+	status      *Status
+	options     options
 }
 
 func NewService(name string, ln listener.Listener, h handler.Handler, opts ...Option) service.Service {
@@ -149,9 +151,15 @@ func (s *defaultService) Addr() net.Addr {
 }
 
 func (s *defaultService) Serve() error {
+	s.lifecycleMu.Lock()
+	if s.closed {
+		s.lifecycleMu.Unlock()
+		return net.ErrClosed
+	}
 
 	s.execCmds("post-up", s.options.postUp)
 	s.setState(StateReady)
+	s.lifecycleMu.Unlock()
 	s.status.addEvent(Event{
 		Time:    time.Now(),
 		Message: fmt.Sprintf("service %s is listening on %s", s.name, s.listener.Addr()),
@@ -292,6 +300,13 @@ func (s *defaultService) Status() *Status {
 }
 
 func (s *defaultService) Close() error {
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	if s.closed {
+		return nil
+	}
+	s.closed = true
+	s.setState(StateClosed)
 	s.execCmds("pre-down", s.options.preDown)
 	defer s.execCmds("post-down", s.options.postDown)
 

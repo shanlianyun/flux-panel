@@ -622,18 +622,18 @@ func resumeService(ctx *gin.Context) {
 
 	// 先关闭现有服务
 	existingSvc.Close()
-	registry.ServiceRegistry().Unregister(name)
 
 	// 等待端口释放
 	time.Sleep(500 * time.Millisecond)
 
 	// 重新解析并启动服务
-	svc, err := parser.ParseService(serviceConfig)
+	svc, err := parser.ParseResumedService(serviceConfig)
 	if err != nil {
 		writeError(ctx, NewError(http.StatusInternalServerError, ErrCodeFailed, fmt.Sprintf("resume service %s failed: %s", name, err.Error())))
 		return
 	}
 
+	registry.ServiceRegistry().Unregister(name)
 	if err := registry.ServiceRegistry().Register(name, svc); err != nil {
 		svc.Close()
 		writeError(ctx, NewError(http.StatusBadRequest, ErrCodeDup, fmt.Sprintf("service %s already exists", name)))
@@ -740,11 +740,12 @@ func rollbackPausedServices(pausedServices []struct {
 }) {
 	for _, pss := range pausedServices {
 		// 重新解析并启动服务
-		svc, err := parser.ParseService(pss.serviceConfig)
+		svc, err := parser.ParseResumedService(pss.serviceConfig)
 		if err != nil {
 			continue // 回滚失败，记录日志但继续处理其他服务
 		}
 
+		registry.ServiceRegistry().Unregister(pss.name)
 		if err := registry.ServiceRegistry().Register(pss.name, svc); err != nil {
 			svc.Close()
 			continue // 回滚失败，记录日志但继续处理其他服务
@@ -1037,13 +1038,12 @@ func resumeServices(ctx *gin.Context) {
 	for _, str := range servicesToResume {
 		// 先关闭现有服务
 		str.service.Close()
-		registry.ServiceRegistry().Unregister(str.name)
 
 		// 等待端口释放
 		time.Sleep(100 * time.Millisecond)
 
 		// 重新解析并启动服务
-		svc, err := parser.ParseService(str.serviceConfig)
+		svc, err := parser.ParseResumedService(str.serviceConfig)
 		if err != nil {
 			// 恢复失败，回滚已恢复的服务
 			rollbackResumedServices(resumedServices)
@@ -1051,6 +1051,7 @@ func resumeServices(ctx *gin.Context) {
 			return
 		}
 
+		registry.ServiceRegistry().Unregister(str.name)
 		if err := registry.ServiceRegistry().Register(str.name, svc); err != nil {
 			svc.Close()
 			// 恢复失败，回滚已恢复的服务

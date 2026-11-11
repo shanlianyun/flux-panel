@@ -1,11 +1,14 @@
 package com.admin.common.utils;
 
 import com.admin.entity.*;
+import com.admin.controller.FlowController;
+import com.admin.common.dto.UserTunnelUpdateDto;
 import com.admin.mapper.ForwardMapper;
 import com.admin.service.*;
 import com.admin.service.impl.ForwardServiceImpl;
-import com.alibaba.fastjson.JSONArray;
-import com.alibaba.fastjson.JSONObject;
+import com.admin.service.impl.UserTunnelServiceImpl;
+import com.alibaba.fastjson2.JSONArray;
+import com.alibaba.fastjson2.JSONObject;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -19,6 +22,7 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.web.socket.CloseStatus;
 import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.*;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -39,8 +43,11 @@ class NodeReconnectSyncTest {
     private final List<WebSocketSession> sessions = new ArrayList<>();
     private final List<JSONObject> commands = new CopyOnWriteArrayList<>();
     private final Set<String> resources = new HashSet<>();
+    private final Set<String> pausedResources = new HashSet<>();
     private String rejectedService;
+    private java.util.function.Consumer<String> commandHook;
     private final List<String> commandThreads = new CopyOnWriteArrayList<>();
+    private final List<String> commandSessions = new CopyOnWriteArrayList<>();
 
     @BeforeEach
     void setUp() {
@@ -170,6 +177,225 @@ class NodeReconnectSyncTest {
         assertEquals("$ 12.5MB 12.5MB", command("AddLimiters").getJSONObject("data").getJSONArray("limits").getString(0));
         assertEquals("40", command("AddService").getJSONArray("data").getJSONObject(0).getString("limiter"));
         assertTrue(commands.indexOf(command("AddLimiters")) < commands.indexOf(command("AddService")));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"expiredGrant", "paused", "deleted", "moved"})
+    void invalidationWhileWaitingForLimiterMustStopReplay(String change) throws Exception {
+        userTunnel.setSpeedId(40);
+        SpeedLimit speed = new SpeedLimit();
+        speed.setId(40L); speed.setTunnelId(10L); speed.setStatus(1); speed.setSpeed(100);
+        when(context.getBean(SpeedLimitService.class).getById(any())).thenReturn(speed);
+        commandHook = type -> {
+            if (!"AddLimiters".equals(type)) return;
+            switch (change) {
+                case "expiredGrant": userTunnel.setExpTime(1L); userTunnel.setStatus(0); break;
+                case "paused": forward.setStatus(0); break;
+                case "deleted": when(context.getBean(ForwardMapper.class).selectById(any())).thenReturn(null); break;
+                case "moved": forward.setTunnelId(99); break;
+            }
+        };
+        connect(1L);
+        drainSync();
+        assertTrue(addedServices().stream().allMatch(s -> s.getJSONObject("metadata") != null
+                        && s.getJSONObject("metadata").getBooleanValue("paused")),
+                "Stale replay created an active service: " + commands);
+    }
+
+    @Test
+    void invalidationDuringTcpCreationPausesBothProtocolsAndKeepsThemResumable() throws Exception {
+        commandHook = type -> { if ("AddService".equals(type)) forward.setStatus(0); };
+        connect(1L);
+        drainSync();
+        assertTrue(pausedResources.contains("1:Service:100_20_30_tcp"), "Invalidated replay left TCP active or missing");
+        assertTrue(pausedResources.contains("1:Service:100_20_30_udp"), "Missing UDP needs a paused, resumable configuration");
+        assertEquals("OK", GostUtil.ResumeService(1L, "100_20_30").getMsg());
+    }
+
+    @Test
+    void quotaInvalidationStopsBothExistingProtocolsAndAllowsLaterResume() throws Exception {
+        resources.add("1:Service:100_20_30_tcp");
+        resources.add("1:Service:100_20_30_udp");
+        commandHook = type -> { if ("AddService".equals(type)) user.setInFlow(100L * 1024 * 1024 * 1024); };
+        connect(1L);
+        drainSync();
+        FlowController flowController = new FlowController();
+        ReflectionTestUtils.setField(flowController, "forwardService", context.getBean(ForwardService.class));
+        ReflectionTestUtils.setField(flowController, "tunnelService", context.getBean(TunnelService.class));
+        flowController.pauseService(Collections.singletonList(forward), "100_20_30");
+        assertEquals(0, forward.getStatus());
+        assertTrue(pausedResources.contains("1:Service:100_20_30_tcp"));
+        assertTrue(pausedResources.contains("1:Service:100_20_30_udp"), "Quota invalidation left UDP running");
+        user.setInFlow(0L);
+        assertEquals("OK", GostUtil.ResumeService(1L, "100_20_30").getMsg());
+        assertTrue(pausedResources.isEmpty());
+    }
+
+    @Test
+    void exitInvalidationKeepsRemoteServicePausedAndResumable() throws Exception {
+        tunnel.setType(2);
+        commandHook = type -> { if ("AddService".equals(type)) userTunnel.setExpTime(1L); };
+        connect(2L);
+        drainSync();
+        assertTrue(pausedResources.contains("2:Service:100_20_30_tls"));
+        assertEquals("OK", GostUtil.ResumeRemoteService(2L, "100_20_30").getMsg());
+    }
+
+    @Test
+    void cosmeticTunnelChangesDoNotInvalidateHealthyReplay() throws Exception {
+        resources.add("1:Service:100_20_30_tcp");
+        resources.add("1:Service:100_20_30_udp");
+        commandHook = type -> {
+            if (!"AddService".equals(type)) return;
+            tunnel.setName("renamed during replay");
+            tunnel.setFlow(2);
+            tunnel.setTrafficRatio(new java.math.BigDecimal("1.5"));
+            tunnel.setUpdatedTime(System.currentTimeMillis());
+        };
+        connect(1L);
+        drainSync();
+        assertEquals(2, addedServices().size());
+        assertTrue(commands.stream().allMatch(c -> "AddService".equals(c.getString("type"))),
+                "Harmless metadata edit interrupted healthy services: " + commands);
+        assertEquals(2, resources.size());
+    }
+
+    @Test
+    void earlyInvalidatedTunnelReplayRetainsDependenciesForResume() throws Exception {
+        tunnel.setType(2);
+        userTunnel.setSpeedId(40);
+        SpeedLimit speed = new SpeedLimit();
+        speed.setId(40L); speed.setTunnelId(10L); speed.setStatus(1); speed.setSpeed(100);
+        when(context.getBean(SpeedLimitService.class).getById(any())).thenReturn(speed);
+        commandHook = type -> { if ("AddLimiters".equals(type)) userTunnel.setExpTime(1L); };
+        connect(1L);
+        drainSync();
+        assertTrue(resources.contains("1:Chains:100_20_30_chains"), "Paused tunnel lost its exit chain");
+        assertTrue(resources.contains("1:Limiters:40"));
+        assertTrue(pausedResources.containsAll(Arrays.asList("1:Service:100_20_30_tcp", "1:Service:100_20_30_udp")));
+        userTunnel.setExpTime(null);
+        assertEquals("OK", GostUtil.ResumeService(1L, "100_20_30").getMsg());
+        assertEquals("100_20_30_chains", addedServices().get(0).getJSONObject("handler").getString("chain"));
+    }
+
+    @Test
+    void compensationCannotSendToReplacementBetweenSessionCheckAndSend() throws Exception {
+        WebSocketSession old = connect(1L);
+        drainSync();
+        forward.setStatus(0);
+        String oldId = old.getId();
+        java.util.concurrent.atomic.AtomicBoolean switched = new java.util.concurrent.atomic.AtomicBoolean();
+        when(old.getId()).thenAnswer(invocation -> {
+            if (switched.compareAndSet(false, true)) connect(1L);
+            return oldId;
+        });
+        commandSessions.clear();
+        GostUtil.RetainPausedService(1L, oldId, "100_20_30", 12000, null,
+                "192.0.2.100:443", tunnel, "round", "eth0", "tcp");
+        drainSync();
+        assertTrue(switched.get());
+        assertTrue(commandSessions.stream().allMatch(oldId::equals),
+                "Old recovery compensation reached replacement session: " + commandSessions);
+    }
+
+    @Test
+    void speedEditWaitsForReplayBeforeSavingGrantAndUpdatingServices() throws Exception {
+        CountDownLatch commandStarted = new CountDownLatch(1);
+        CountDownLatch releaseCommand = new CountDownLatch(1);
+        commandHook = type -> {
+            if (!"AddService".equals(type)) return;
+            commandStarted.countDown();
+            try { assertTrue(releaseCommand.await(3, TimeUnit.SECONDS)); }
+            catch (InterruptedException e) { Thread.currentThread().interrupt(); throw new AssertionError(e); }
+        };
+        connect(1L);
+        assertTrue(commandStarted.await(3, TimeUnit.SECONDS));
+        UserTunnelServiceImpl editor = userTunnelEditor();
+        java.util.concurrent.ExecutorService edits = java.util.concurrent.Executors.newSingleThreadExecutor();
+        try {
+            java.util.concurrent.Future<?> edit = edits.submit(() -> assertEquals(0, editor.updateUserTunnel(speedEdit()).getCode()));
+            assertThrows(java.util.concurrent.TimeoutException.class, () -> edit.get(100, TimeUnit.MILLISECONDS),
+                    "Grant save and service updates must both wait behind replay");
+            assertNull(userTunnel.getSpeedId(), "Grant changed before edit acquired rule locks");
+            releaseCommand.countDown();
+            edit.get(3, TimeUnit.SECONDS);
+            drainSync();
+            assertEquals(40, userTunnel.getSpeedId());
+            assertEquals("UpdateService", commands.get(commands.size() - 1).getString("type"));
+            assertTrue(pausedResources.isEmpty(), "Replay compensated after a successful speed edit");
+            assertEquals(1, forward.getStatus());
+        } finally {
+            releaseCommand.countDown();
+            edits.shutdownNow();
+        }
+    }
+
+    @Test
+    void speedEditKeepsPausedRulePaused() throws Exception {
+        forward.setStatus(0);
+        resources.add("1:Service:100_20_30_tcp");
+        resources.add("1:Service:100_20_30_udp");
+        pausedResources.addAll(resources);
+        connect(1L);
+        drainSync();
+        assertEquals(0, userTunnelEditor().updateUserTunnel(speedEdit()).getCode());
+        JSONArray configs = command("UpdateService").getJSONArray("data");
+        for (Object item : configs) {
+            JSONObject cfg = (JSONObject) item;
+            assertEquals("40", cfg.getString("limiter"));
+            assertNotNull(cfg.getJSONObject("metadata"));
+            assertTrue(cfg.getJSONObject("metadata").getBooleanValue("paused"), "Speed edit reactivated a paused service");
+        }
+    }
+
+    private UserTunnelServiceImpl userTunnelEditor() {
+        UserTunnelServiceImpl editor = spy(new UserTunnelServiceImpl());
+        doReturn(userTunnel).when(editor).getById(any());
+        doReturn(userTunnel).when(editor).getOne(any());
+        doReturn(true).when(editor).updateById(any(UserTunnel.class));
+        ReflectionTestUtils.setField(editor, "forwardService", context.getBean(ForwardService.class));
+        ReflectionTestUtils.setField(editor, "tunnelService", context.getBean(TunnelService.class));
+        ReflectionTestUtils.setField(editor, "nodeService", context.getBean(NodeService.class));
+        return editor;
+    }
+
+    private UserTunnelUpdateDto speedEdit() {
+        UserTunnelUpdateDto dto = new UserTunnelUpdateDto();
+        dto.setId(30); dto.setSpeedId(40); dto.setFlow(100L); dto.setNum(10);
+        dto.setStatus(1); dto.setExpTime(System.currentTimeMillis() + 60000); dto.setFlowResetTime(1L);
+        return dto;
+    }
+
+    @Test
+    void quotaPauseWaitsForReplayThenStopsTheRestoredRule() throws Exception {
+        CountDownLatch commandStarted = new CountDownLatch(1);
+        CountDownLatch releaseCommand = new CountDownLatch(1);
+        commandHook = type -> {
+            if (!"AddService".equals(type)) return;
+            commandStarted.countDown();
+            try { assertTrue(releaseCommand.await(3, TimeUnit.SECONDS)); }
+            catch (InterruptedException e) { Thread.currentThread().interrupt(); throw new AssertionError(e); }
+        };
+        connect(1L);
+        assertTrue(commandStarted.await(3, TimeUnit.SECONDS));
+        FlowController flowController = new FlowController();
+        ReflectionTestUtils.setField(flowController, "forwardService", context.getBean(ForwardService.class));
+        ReflectionTestUtils.setField(flowController, "tunnelService", context.getBean(TunnelService.class));
+        java.util.concurrent.ExecutorService stops = java.util.concurrent.Executors.newSingleThreadExecutor();
+        try {
+            java.util.concurrent.Future<?> pause = stops.submit(() ->
+                    flowController.pauseService(Collections.singletonList(forward), "100_20_30"));
+            assertThrows(java.util.concurrent.TimeoutException.class, () -> pause.get(100, TimeUnit.MILLISECONDS),
+                    "Quota pause must serialize with the in-flight replay");
+            releaseCommand.countDown();
+            pause.get(3, TimeUnit.SECONDS);
+            drainSync();
+            assertEquals(0, forward.getStatus());
+            assertEquals("PauseService", commands.get(commands.size() - 1).getString("type"));
+        } finally {
+            releaseCommand.countDown();
+            stops.shutdownNow();
+        }
     }
 
     @ParameterizedTest
@@ -353,7 +579,8 @@ class NodeReconnectSyncTest {
 
     private WebSocketSession connect(long nodeId) throws Exception {
         WebSocketSession session = mock(WebSocketSession.class);
-        when(session.getId()).thenReturn(UUID.randomUUID().toString());
+        String sessionId = UUID.randomUUID().toString();
+        when(session.getId()).thenReturn(sessionId);
         Map<String, Object> attributes = new HashMap<>();
         attributes.put("id", Long.toString(nodeId));
         attributes.put("type", "1");
@@ -363,10 +590,15 @@ class NodeReconnectSyncTest {
             JSONObject request = JSONObject.parseObject(((TextMessage) invocation.getArgument(0)).getPayload());
             commands.add(request);
             commandThreads.add(Thread.currentThread().getName());
+            commandSessions.add(sessionId);
             String type = request.getString("type");
-            String kind = type.replace("Update", "").replace("Add", "");
+            if (commandHook != null) commandHook.accept(type);
+            String kind = type.replace("Update", "").replace("Add", "").replace("Delete", "")
+                    .replace("Pause", "").replace("Resume", "");
             List<String> names = new ArrayList<>();
-            if ("Service".equals(kind)) {
+            if ("DeleteService".equals(type) || "PauseService".equals(type) || "ResumeService".equals(type)) {
+                for (Object name : request.getJSONObject("data").getJSONArray("services")) names.add(name.toString());
+            } else if ("Service".equals(kind)) {
                 for (Object item : request.getJSONArray("data")) {
                     names.add(((JSONObject) item).getString("name"));
                 }
@@ -382,18 +614,39 @@ class NodeReconnectSyncTest {
                     response = resourceType + " " + name + " not found";
                     break;
                 }
+                if ((type.startsWith("Pause") || type.startsWith("Resume") || type.startsWith("Delete"))
+                        && !resources.contains(key)) {
+                    response = resourceType + " " + name + " not found";
+                    break;
+                }
                 if (type.startsWith("Add") && resources.contains(key)) {
                     response = resourceType + " " + name + " already exists";
                     break;
                 }
             }
-            if (type.endsWith("Service") && rejectedService != null
+            if ((type.startsWith("Add") || type.startsWith("Update")) && type.endsWith("Service") && rejectedService != null
                     && rejectedService.equals(request.getJSONArray("data").getJSONObject(0).getString("name"))) {
                 response = "address already in use";
             }
             if ("OK".equals(response) && type.startsWith("Add")) {
                 for (String name : names) {
                     resources.add(nodeId + ":" + kind + ":" + name);
+                }
+                if ("Service".equals(kind)) {
+                    for (Object item : request.getJSONArray("data")) {
+                        JSONObject cfg = (JSONObject) item;
+                        if (cfg.getJSONObject("metadata") != null && cfg.getJSONObject("metadata").getBooleanValue("paused")) {
+                            pausedResources.add(nodeId + ":Service:" + cfg.getString("name"));
+                        }
+                    }
+                }
+            }
+            if ("OK".equals(response)) {
+                for (String name : names) {
+                    String key = nodeId + ":" + kind + ":" + name;
+                    if (type.startsWith("Delete")) { resources.remove(key); pausedResources.remove(key); }
+                    if (type.startsWith("Pause")) pausedResources.add(key);
+                    if (type.startsWith("Resume")) pausedResources.remove(key);
                 }
             }
             JSONObject reply = new JSONObject();

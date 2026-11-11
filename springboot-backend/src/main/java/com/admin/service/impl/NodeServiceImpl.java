@@ -337,21 +337,29 @@ public class NodeServiceImpl extends ServiceImpl<NodeMapper, Node> implements No
         ViteConfig viteConfig = viteConfigService.getOne(new QueryWrapper<ViteConfig>().eq("name", "ip"));
         if (viteConfig == null) return R.err("请先前往网站配置中设置ip");
 
-        StringBuilder command = new StringBuilder();
-        
-        // 第一部分：下载安装脚本  
-        command.append("curl -L https://raw.githubusercontent.com/shanlianyun/flux-panel/refs/heads/main/install.sh")
-               .append(" -o ./install.sh && chmod +x ./install.sh && ");
-        
-        // 处理服务器地址，如果是IPv6需要添加方括号
+        // 下载到临时文件，安装完成后清理；不要把脚本落在用户当前目录。
+        String installerUrl = "https://raw.githubusercontent.com/shanlianyun/flux-panel/refs/heads/main/install.sh";
         String processedServerAddr = processServerAddress(viteConfig.getValue());
-        
-        // 第二部分：执行安装脚本（去掉-u参数）
-        command.append("./install.sh")
-               .append(" -a ").append(processedServerAddr)  // 服务器地址
-               .append(" -s ").append(node.getSecret());    // 节点密钥
+        String temporaryPath = "/tmp/flux-panel-install.XXXXXX";
+        StringBuilder command = new StringBuilder();
+        command.append("(tmp=$(mktemp ").append(shellQuote(temporaryPath)).append(")")
+               .append(" && curl --fail --location --retry 3 ")
+               .append(shellQuote(installerUrl)).append(" -o \"$tmp\"")
+               .append(" && chmod 700 \"$tmp\"")
+               .append(" && \"$tmp\" install -a ")
+               .append(shellQuote(processedServerAddr))
+               .append(" -s ").append(shellQuote(node.getSecret()))
+               .append("; status=$?; rm -f \"$tmp\"; exit $status)");
         
         return R.ok(command.toString());
+    }
+
+    /** Quote a value for a POSIX shell command copied from the panel. */
+    private String shellQuote(String value) {
+        if (value == null) {
+            return "''";
+        }
+        return "'" + value.replace("'", "'\"'\"'") + "'";
     }
 
     /**

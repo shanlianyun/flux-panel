@@ -6,6 +6,7 @@ import com.admin.common.dto.ForwardWithTunnelDto;
 import com.admin.common.dto.GostDto;
 import com.admin.common.lang.R;
 import com.admin.common.utils.GostUtil;
+import com.admin.common.utils.ForwardRuleLock;
 import com.admin.common.utils.JwtUtil;
 import com.admin.common.utils.WebSocketServer;
 import com.admin.entity.*;
@@ -13,7 +14,7 @@ import com.admin.mapper.ForwardMapper;
 import com.admin.service.*;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
-import com.alibaba.fastjson.JSONObject;
+import com.alibaba.fastjson2.JSONObject;
 import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.BeanUtils;
@@ -140,6 +141,12 @@ public class ForwardServiceImpl extends ServiceImpl<ForwardMapper, Forward> impl
 
     @Override
     public R updateForward(ForwardUpdateDto forwardUpdateDto) {
+        synchronized (ForwardRuleLock.forRule(forwardUpdateDto.getId())) {
+            return updateForwardLocked(forwardUpdateDto);
+        }
+    }
+
+    private R updateForwardLocked(ForwardUpdateDto forwardUpdateDto) {
         // 1. 获取当前用户信息
         UserInfo currentUser = getCurrentUserInfo();
         if (currentUser.getRoleId() != ADMIN_ROLE_ID) {
@@ -254,6 +261,12 @@ public class ForwardServiceImpl extends ServiceImpl<ForwardMapper, Forward> impl
 
     @Override
     public R deleteForward(Long id) {
+        synchronized (ForwardRuleLock.forRule(id)) {
+            return deleteForwardLocked(id);
+        }
+    }
+
+    private R deleteForwardLocked(Long id) {
         // 1. 获取当前用户信息
         UserInfo currentUser = getCurrentUserInfo();
 
@@ -314,6 +327,12 @@ public class ForwardServiceImpl extends ServiceImpl<ForwardMapper, Forward> impl
 
     @Override
     public R forceDeleteForward(Long id) {
+        synchronized (ForwardRuleLock.forRule(id)) {
+            return forceDeleteForwardLocked(id);
+        }
+    }
+
+    private R forceDeleteForwardLocked(Long id) {
         // 1. 获取当前用户信息
         UserInfo currentUser = getCurrentUserInfo();
 
@@ -336,6 +355,12 @@ public class ForwardServiceImpl extends ServiceImpl<ForwardMapper, Forward> impl
      * 改变转发状态（暂停/恢复）
      */
     private R changeForwardStatus(Long id, int targetStatus, String operation, String gostMethod) {
+        synchronized (ForwardRuleLock.forRule(id)) {
+            return changeForwardStatusLocked(id, targetStatus, operation, gostMethod);
+        }
+    }
+
+    private R changeForwardStatusLocked(Long id, int targetStatus, String operation, String gostMethod) {
         // 1. 获取当前用户信息
         UserInfo currentUser = getCurrentUserInfo();
 
@@ -1393,6 +1418,12 @@ public class ForwardServiceImpl extends ServiceImpl<ForwardMapper, Forward> impl
 
 
     public void updateForwardA(Forward forward) {
+        synchronized (ForwardRuleLock.forRule(forward.getId())) {
+            updateForwardALocked(forward);
+        }
+    }
+
+    private void updateForwardALocked(Forward forward) {
         Tunnel tunnel = validateTunnel(forward.getTunnelId());
         if (tunnel == null) {
             return;
@@ -1440,37 +1471,48 @@ public class ForwardServiceImpl extends ServiceImpl<ForwardMapper, Forward> impl
                         if (!WebSocketServer.isCurrentNodeSession(nodeId, sessionId)) {
                             return;
                         }
-                        try {
-                            // Earlier commands may take seconds; queued snapshots can already be deleted or paused.
-                            forward = this.getById(forward.getId());
-                            if (forward == null || !Objects.equals(forward.getStatus(), FORWARD_STATUS_ACTIVE)
-                                    || !Objects.equals(forward.getTunnelId(), tunnel.getId().intValue())) {
-                                continue;
+                        synchronized (ForwardRuleLock.forRule(forward.getId())) {
+                            try {
+                                // Earlier commands may take seconds; queued snapshots can already be deleted or paused.
+                                forward = this.getById(forward.getId());
+                                if (forward == null || !Objects.equals(forward.getStatus(), FORWARD_STATUS_ACTIVE)
+                                        || !Objects.equals(forward.getTunnelId(), tunnel.getId().intValue())) {
+                                    continue;
+                                }
+                                Tunnel currentTunnel = tunnelService.getById(forward.getTunnelId());
+                                if (currentTunnel == null || !Objects.equals(currentTunnel.getStatus(), TUNNEL_STATUS_ACTIVE)) {
+                                    continue;
+                                }
+                                boolean currentEntrance = Objects.equals(currentTunnel.getInNodeId(), nodeId);
+                                boolean currentExit = Objects.equals(currentTunnel.getType(), TUNNEL_TYPE_TUNNEL_FORWARD)
+                                        && Objects.equals(currentTunnel.getOutNodeId(), nodeId);
+                                if (!currentEntrance && !currentExit) {
+                                    continue;
+                                }
+                                User user = userService.getById(forward.getUserId());
+                                UserTunnel grant = getUserTunnel(forward.getUserId(), forward.getTunnelId());
+                                if (!canRestoreForward(user, grant)) {
+                                    continue;
+                                }
+                                Forward snapshot = new Forward();
+                                BeanUtils.copyProperties(forward, snapshot);
+                                Tunnel tunnelSnapshot = new Tunnel();
+                                BeanUtils.copyProperties(currentTunnel, tunnelSnapshot);
+                                UserTunnel grantSnapshot = null;
+                                if (grant != null) {
+                                    grantSnapshot = new UserTunnel();
+                                    BeanUtils.copyProperties(grant, grantSnapshot);
+                                }
+                                R result = restoreNodeForward(nodeId, sessionId, snapshot, tunnelSnapshot, grantSnapshot,
+                                        currentEntrance, currentExit, syncedLimiters);
+                                if (result.getCode() == 0) {
+                                    synced++;
+                                } else {
+                                    log.warn("Node {} rule {} sync failed: {}", nodeId, forward.getId(), result.getMsg());
+                                }
+                            } catch (Exception e) {
+                                log.error("Node {} queued rule sync failed", nodeId, e);
                             }
-                            Tunnel currentTunnel = tunnelService.getById(forward.getTunnelId());
-                            if (currentTunnel == null || !Objects.equals(currentTunnel.getStatus(), TUNNEL_STATUS_ACTIVE)) {
-                                continue;
-                            }
-                            boolean currentEntrance = Objects.equals(currentTunnel.getInNodeId(), nodeId);
-                            boolean currentExit = Objects.equals(currentTunnel.getType(), TUNNEL_TYPE_TUNNEL_FORWARD)
-                                    && Objects.equals(currentTunnel.getOutNodeId(), nodeId);
-                            if (!currentEntrance && !currentExit) {
-                                continue;
-                            }
-                            User user = userService.getById(forward.getUserId());
-                            UserTunnel grant = getUserTunnel(forward.getUserId(), forward.getTunnelId());
-                            if (!canRestoreForward(user, grant)) {
-                                continue;
-                            }
-                            R result = restoreNodeForward(nodeId, forward, currentTunnel, grant,
-                                    currentEntrance, currentExit, syncedLimiters);
-                            if (result.getCode() == 0) {
-                                synced++;
-                            } else {
-                                log.warn("Node {} rule {} sync failed: {}", nodeId, forward.getId(), result.getMsg());
-                            }
-                        } catch (Exception e) {
-                            log.error("Node {} queued rule sync failed", nodeId, e);
                         }
                     }
                 }
@@ -1510,56 +1552,168 @@ public class ForwardServiceImpl extends ServiceImpl<ForwardMapper, Forward> impl
         }
     }
 
-    private R restoreNodeForward(Long nodeId, Forward forward, Tunnel tunnel, UserTunnel grant,
+    private R restoreNodeForward(Long nodeId, String sessionId, Forward forward, Tunnel tunnel, UserTunnel grant,
                                  boolean entrance, boolean exit, Set<Integer> syncedLimiters) {
         String name = buildServiceName(forward.getId(), forward.getUserId(), grant);
         Integer limiter = grant == null ? null : grant.getSpeedId();
-        if (entrance) {
-            if (limiter != null && !syncedLimiters.contains(limiter)) {
-                SpeedLimit speed = speedLimitService.getById(limiter);
-                if (speed == null || !Objects.equals(speed.getStatus(), 1)
-                        || !Objects.equals(speed.getTunnelId(), tunnel.getId())
-                        || speed.getSpeed() == null || speed.getSpeed() <= 0) {
-                    return R.err("Assigned limiter is unavailable");
+        try {
+            if (entrance) {
+                if (limiter != null && !syncedLimiters.contains(limiter)) {
+                    SpeedLimit speed = speedLimitService.getById(limiter);
+                    if (speed == null || !Objects.equals(speed.getStatus(), 1)
+                            || !Objects.equals(speed.getTunnelId(), tunnel.getId())
+                            || speed.getSpeed() == null || speed.getSpeed() <= 0) {
+                        return R.err("Assigned limiter is unavailable");
+                    }
+                    String rate = BigDecimal.valueOf(speed.getSpeed() / 8.0)
+                            .setScale(1, RoundingMode.HALF_UP).toPlainString();
+                    requireCurrentReplay(nodeId, sessionId, forward, tunnel, grant);
+                    GostDto result = GostUtil.AddLimiters(nodeId, sessionId, speed.getId(), rate);
+                    requireCurrentReplay(nodeId, sessionId, forward, tunnel, grant);
+                    if (!isGostResourcePresent(result, "limiter " + speed.getId())) {
+                        return R.err(result.getMsg());
+                    }
+                    syncedLimiters.add(limiter);
                 }
-                String rate = BigDecimal.valueOf(speed.getSpeed() / 8.0)
-                        .setScale(1, RoundingMode.HALF_UP).toPlainString();
-                GostDto result = GostUtil.AddLimiters(nodeId, speed.getId(), rate);
-                if (!isGostResourcePresent(result, "limiter " + speed.getId())) {
+                if (Objects.equals(tunnel.getType(), TUNNEL_TYPE_TUNNEL_FORWARD)) {
+                    String outIp = tunnel.getOutIp();
+                    String address = (outIp.contains(":") ? "[" + outIp + "]" : outIp) + ":" + forward.getOutPort();
+                    requireCurrentReplay(nodeId, sessionId, forward, tunnel, grant);
+                    GostDto result = GostUtil.AddChains(nodeId, sessionId, name, address, tunnel.getProtocol(), tunnel.getInterfaceName());
+                    requireCurrentReplay(nodeId, sessionId, forward, tunnel, grant);
+                    if (!isGostResourcePresent(result, "chain " + name + "_chains")) {
+                        return R.err(result.getMsg());
+                    }
+                }
+            }
+            if (exit) {
+                requireCurrentReplay(nodeId, sessionId, forward, tunnel, grant);
+                GostDto result = GostUtil.AddRemoteService(nodeId, sessionId, name, forward.getOutPort(), forward.getRemoteAddr(),
+                        tunnel.getProtocol(), forward.getStrategy(), forward.getInterfaceName());
+                requireCurrentReplay(nodeId, sessionId, forward, tunnel, grant);
+                if (!isGostResourcePresent(result, "service " + name + "_tls")) {
                     return R.err(result.getMsg());
                 }
-                syncedLimiters.add(limiter);
+            }
+            if (entrance) {
+                String networkInterface = Objects.equals(tunnel.getType(), TUNNEL_TYPE_TUNNEL_FORWARD)
+                        ? null : forward.getInterfaceName();
+                // A batch add stops at the first existing protocol; repair TCP and UDP independently.
+                for (String protocol : new String[]{"tcp", "udp"}) {
+                    requireCurrentReplay(nodeId, sessionId, forward, tunnel, grant);
+                    GostDto result = GostUtil.AddService(nodeId, sessionId, name, forward.getInPort(), limiter,
+                            forward.getRemoteAddr(), tunnel.getType(), tunnel, forward.getStrategy(), networkInterface, protocol);
+                    requireCurrentReplay(nodeId, sessionId, forward, tunnel, grant);
+                    if (!isGostResourcePresent(result, "service " + name + "_" + protocol)) {
+                        return R.err(result.getMsg());
+                    }
+                }
+            }
+            requireCurrentReplay(nodeId, sessionId, forward, tunnel, grant);
+            return R.ok();
+        } catch (ReplayInvalidatedException e) {
+            // The remote command may already have bound a socket before its reply arrived.
+            stopInvalidatedReplay(nodeId, sessionId, forward, tunnel, grant, entrance, exit);
+            return R.err("Rule or authorization changed during replay");
+        }
+    }
+
+    private void stopInvalidatedReplay(Long nodeId, String sessionId, Forward snapshot, Tunnel tunnel, UserTunnel grant,
+                                       boolean entrance, boolean exit) {
+        Forward current = this.getById(snapshot.getId());
+        UserTunnel currentGrant = current == null ? null : getUserTunnel(current.getUserId(), current.getTunnelId());
+        boolean retained = current != null
+                && Objects.equals(current.getUserId(), snapshot.getUserId())
+                && Objects.equals(current.getTunnelId(), snapshot.getTunnelId())
+                && Objects.equals(currentGrant == null ? null : currentGrant.getId(), grant == null ? null : grant.getId());
+        String name = buildServiceName(snapshot.getId(), snapshot.getUserId(), grant);
+        String networkInterface = Objects.equals(tunnel.getType(), TUNNEL_TYPE_TUNNEL_FORWARD) ? null : snapshot.getInterfaceName();
+        List<String> protocols = new ArrayList<>();
+        if (entrance) { protocols.add("tcp"); protocols.add("udp"); }
+        if (exit) protocols.add("tls");
+        for (String protocol : protocols) {
+            if (!WebSocketServer.isCurrentNodeSession(nodeId, sessionId)) return;
+            String serviceName = name + "_" + protocol;
+            GostDto result;
+            if (!retained) {
+                result = GostUtil.DeleteNamedService(nodeId, sessionId, serviceName);
+            } else if ("tls".equals(protocol)) {
+                result = GostUtil.RetainPausedRemoteService(nodeId, sessionId, name, snapshot.getOutPort(),
+                        snapshot.getRemoteAddr(), tunnel.getProtocol(), snapshot.getStrategy(), snapshot.getInterfaceName());
+            } else {
+                result = GostUtil.RetainPausedService(nodeId, sessionId, name, snapshot.getInPort(),
+                        grant == null ? null : grant.getSpeedId(), snapshot.getRemoteAddr(), tunnel,
+                        snapshot.getStrategy(), networkInterface, protocol);
+            }
+            if (result == null || (!GOST_SUCCESS_MSG.equals(result.getMsg())
+                    && !(!retained && ("service " + serviceName + " not found").equals(result.getMsg())))) {
+                log.error("Node {} invalidated rule {} cleanup failed for {}", nodeId, snapshot.getId(), serviceName);
+            }
+        }
+        // Early invalidation may happen before dependencies were sent. They do
+        // not bind listeners, and must exist before an ordinary resume is safe.
+        if (retained && entrance && WebSocketServer.isCurrentNodeSession(nodeId, sessionId)) {
+            if (grant != null && grant.getSpeedId() != null) {
+                SpeedLimit speed = speedLimitService.getById(grant.getSpeedId());
+                if (speed != null && Objects.equals(speed.getStatus(), 1)
+                        && Objects.equals(speed.getTunnelId(), tunnel.getId())
+                        && speed.getSpeed() != null && speed.getSpeed() > 0) {
+                    String rate = BigDecimal.valueOf(speed.getSpeed() / 8.0).setScale(1, RoundingMode.HALF_UP).toPlainString();
+                    GostDto result = GostUtil.AddLimiters(nodeId, sessionId, speed.getId(), rate);
+                    if (!isGostResourcePresent(result, "limiter " + speed.getId())) {
+                        log.error("Node {} paused rule {} limiter recovery failed", nodeId, snapshot.getId());
+                    }
+                }
             }
             if (Objects.equals(tunnel.getType(), TUNNEL_TYPE_TUNNEL_FORWARD)) {
                 String outIp = tunnel.getOutIp();
-                String address = (outIp.contains(":") ? "[" + outIp + "]" : outIp) + ":" + forward.getOutPort();
-                GostDto result = GostUtil.AddChains(nodeId, name, address, tunnel.getProtocol(), tunnel.getInterfaceName());
+                String address = (outIp.contains(":") ? "[" + outIp + "]" : outIp) + ":" + snapshot.getOutPort();
+                GostDto result = GostUtil.AddChains(nodeId, sessionId, name, address, tunnel.getProtocol(), tunnel.getInterfaceName());
                 if (!isGostResourcePresent(result, "chain " + name + "_chains")) {
-                    return R.err(result.getMsg());
+                    log.error("Node {} paused rule {} chain recovery failed", nodeId, snapshot.getId());
                 }
             }
         }
-        if (exit) {
-            GostDto result = GostUtil.AddRemoteService(nodeId, name, forward.getOutPort(), forward.getRemoteAddr(),
-                    tunnel.getProtocol(), forward.getStrategy(), forward.getInterfaceName());
-            if (!isGostResourcePresent(result, "service " + name + "_tls")) {
-                return R.err(result.getMsg());
-            }
-        }
-        if (entrance) {
-            String networkInterface = Objects.equals(tunnel.getType(), TUNNEL_TYPE_TUNNEL_FORWARD)
-                    ? null : forward.getInterfaceName();
-            // A batch add stops at the first existing protocol; repair TCP and UDP independently.
-            for (String protocol : new String[]{"tcp", "udp"}) {
-                GostDto result = GostUtil.AddService(nodeId, name, forward.getInPort(), limiter,
-                        forward.getRemoteAddr(), tunnel.getType(), tunnel, forward.getStrategy(), networkInterface, protocol);
-                if (!isGostResourcePresent(result, "service " + name + "_" + protocol)) {
-                    return R.err(result.getMsg());
-                }
-            }
-        }
-        return R.ok();
+        if (!retained && entrance && Objects.equals(tunnel.getType(), TUNNEL_TYPE_TUNNEL_FORWARD)
+                && WebSocketServer.isCurrentNodeSession(nodeId, sessionId)) GostUtil.DeleteChains(nodeId, sessionId, name);
     }
+
+    private void requireCurrentReplay(Long nodeId, String sessionId, Forward snapshot, Tunnel tunnel, UserTunnel grant) {
+        Forward current = this.getById(snapshot.getId());
+        if (!WebSocketServer.isCurrentNodeSession(nodeId, sessionId)
+                || current == null || !Objects.equals(current.getStatus(), FORWARD_STATUS_ACTIVE)
+                || !Objects.equals(current.getUserId(), snapshot.getUserId())
+                || !Objects.equals(current.getTunnelId(), snapshot.getTunnelId())
+                || !Objects.equals(current.getInPort(), snapshot.getInPort())
+                || !Objects.equals(current.getOutPort(), snapshot.getOutPort())
+                || !Objects.equals(current.getRemoteAddr(), snapshot.getRemoteAddr())
+                || !Objects.equals(current.getStrategy(), snapshot.getStrategy())
+                || !Objects.equals(current.getInterfaceName(), snapshot.getInterfaceName())) {
+            throw new ReplayInvalidatedException();
+        }
+        Tunnel currentTunnel = tunnelService.getById(current.getTunnelId());
+        UserTunnel currentGrant = getUserTunnel(current.getUserId(), current.getTunnelId());
+        if (currentTunnel == null || !Objects.equals(currentTunnel.getStatus(), TUNNEL_STATUS_ACTIVE)
+                || !sameReplayTunnel(currentTunnel, tunnel)
+                || !Objects.equals(currentGrant == null ? null : currentGrant.getId(), grant == null ? null : grant.getId())
+                || !Objects.equals(currentGrant == null ? null : currentGrant.getSpeedId(), grant == null ? null : grant.getSpeedId())
+                || !canRestoreForward(userService.getById(current.getUserId()), currentGrant)) {
+            throw new ReplayInvalidatedException();
+        }
+    }
+
+    private boolean sameReplayTunnel(Tunnel current, Tunnel snapshot) {
+        return Objects.equals(current.getInNodeId(), snapshot.getInNodeId())
+                && Objects.equals(current.getOutNodeId(), snapshot.getOutNodeId())
+                && Objects.equals(current.getType(), snapshot.getType())
+                && Objects.equals(current.getOutIp(), snapshot.getOutIp())
+                && Objects.equals(current.getProtocol(), snapshot.getProtocol())
+                && Objects.equals(current.getTcpListenAddr(), snapshot.getTcpListenAddr())
+                && Objects.equals(current.getUdpListenAddr(), snapshot.getUdpListenAddr())
+                && Objects.equals(current.getInterfaceName(), snapshot.getInterfaceName());
+    }
+
+    private static class ReplayInvalidatedException extends RuntimeException {}
 
     private boolean isGostResourcePresent(GostDto result, String resource) {
         return result != null && (GOST_SUCCESS_MSG.equals(result.getMsg())

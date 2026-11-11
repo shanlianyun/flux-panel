@@ -7,7 +7,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"sync" // 新增：用于管理连接状态的互斥锁
 	"time"
@@ -94,6 +96,7 @@ type WebSocketReporter struct {
 	connecting     bool              // 新增：正在连接状态
 	connMutex      sync.Mutex        // 新增：连接状态锁
 	aesCrypto      *crypto.AESCrypto // 新增：AES加密器
+	secret         string
 }
 
 // NewWebSocketReporter 创建一个新的WebSocket报告器
@@ -119,6 +122,7 @@ func NewWebSocketReporter(serverURL string, secret string) *WebSocketReporter {
 		connected:      false,
 		connecting:     false,
 		aesCrypto:      aesCrypto,
+		secret:         secret,
 	}
 }
 
@@ -200,7 +204,9 @@ func (w *WebSocketReporter) connect() error {
 	dialer := websocket.DefaultDialer
 	dialer.HandshakeTimeout = 10 * time.Second
 
-	conn, _, err := dialer.Dial(u.String(), nil)
+	headers := make(http.Header)
+	headers.Set("X-Node-Secret", w.secret)
+	conn, _, err := dialer.Dial(u.String(), headers)
 	if err != nil {
 		return fmt.Errorf("连接WebSocket失败: %v", err)
 	}
@@ -935,9 +941,13 @@ func getMemoryInfo() MemoryInfo {
 func StartWebSocketReporterWithConfig(Addr string, Secret string, Version string) *WebSocketReporter {
 
 	// 构建包含本机IP的WebSocket URL
-	var fullURL = "ws://" + Addr + "/system-info?type=1&secret=" + Secret + "&version=" + Version
+	scheme := "ws"
+	if strings.EqualFold(os.Getenv("GOST_PANEL_SCHEME"), "https") {
+		scheme = "wss"
+	}
+	var fullURL = scheme + "://" + Addr + "/system-info?type=1&version=" + url.QueryEscape(Version)
 
-	fmt.Printf("🔗 WebSocket连接URL: %s\n", fullURL)
+	fmt.Printf("🔗 WebSocket连接地址: %s\n", fullURL)
 
 	reporter := NewWebSocketReporter(fullURL, Secret) // Pass Secret here
 	reporter.Start()

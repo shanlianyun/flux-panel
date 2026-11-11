@@ -126,3 +126,19 @@ docker compose --project-directory "$PWD" --project-name "$ORIGINAL_PROJECT" --e
 fork 的 [`gost-latest` Release](https://github.com/shanlianyun/flux-panel/releases/tag/gost-latest) 已发布 Linux AMD64/ARM64 二进制及对应 SHA-256 文件，并保留兼容旧脚本的 `gost`/`gost.sha256` 资产；已下载核对当前三个二进制的校验和。修改 `go-gost` 源码后，在 GitHub Actions 手动运行 `Build gost release assets` 更新这些资产。新安装脚本会严格要求匹配的校验和；在测试节点验证安装、`gost -V` 和节点心跳前，不要用新 `install.sh` 更新正在运行的节点，再分批迁移节点。
 
 安装器默认直连 GitHub，不再根据 IP 地理定位自动将二进制和配置下载请求转交给第三方代理。如网络环境必须使用镜像，请显式设置 `GITHUB_MIRROR_PREFIX`，只使用你信任的服务。
+
+安全部署节点时，先为面板配置有效 TLS 证书和反向代理，再使用 `GOST_PANEL_SCHEME=https ./install.sh`（或更新前导出该变量）。旧的 HTTP/WS 模式仅用于受控内网兼容，不能作为公网安全配置。
+
+### 面板维护时的节点可用性
+
+节点上的 GOST 转发服务由节点本地进程独立监听和转发。面板停机维护只会暂时中断控制通道和状态上报，不会停止已经运行的转发规则；节点会每 5 秒重试连接，面板恢复后自动重连并同步数据库中的有效规则。维护期间请不要依赖面板执行规则变更，恢复后再检查节点在线状态和转发连通性。
+
+### 节点脚本与滚动更新
+
+节点安装命令应从面板“节点管理”页面复制。已有节点下载脚本后直接运行数字菜单：
+
+```bash
+./install.sh
+```
+
+已有旧节点选择菜单 `2` 更新，不要选择 `1` 覆盖配置；更新会保留 `/etc/gost/config.json` 和 `/etc/gost/gost.json`，只在下载文件通过 SHA-256 与版本检查后替换二进制。若新二进制无法启动，脚本会恢复旧二进制。更新期间 GOST 会短暂重启，因此应先灰度一台节点，再按批次滚动更新，并在每台节点执行 `systemctl is-active gost`、`gost -V` 和实际转发检查。公网面板请在 TLS 反向代理就绪后设置 `GOST_PANEL_SCHEME=https`。

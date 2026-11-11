@@ -56,187 +56,133 @@ download_and_verify_gost() {
 
 
 
-# 显示菜单
+
+# 显示菜单。数字菜单是节点日常管理的推荐入口。
 show_menu() {
   echo "==============================================="
   echo "              管理脚本"
   echo "==============================================="
   echo "请选择操作："
   echo "1. 安装"
-  echo "2. 更新"  
+  echo "2. 更新"
   echo "3. 卸载"
-  echo "4. 退出"
+  echo "4. 屏蔽 http/tls/socks 协议"
+  echo "5. 退出"
   echo "==============================================="
 }
-
-# 删除脚本自身
-delete_self() {
-  echo ""
-  echo "🗑️ 操作已完成，正在清理脚本文件..."
-  SCRIPT_PATH="$(readlink -f "$0" 2>/dev/null || realpath "$0" 2>/dev/null || echo "$0")"
-  sleep 1
-  rm -f "$SCRIPT_PATH" && echo "✅ 脚本文件已删除" || echo "❌ 删除脚本文件失败"
-}
-
-# 检查并安装 tcpkill
-check_and_install_tcpkill() {
-  # 检查 tcpkill 是否已安装
-  if command -v tcpkill &> /dev/null; then
-    return 0
-  fi
-  
-  # 检测操作系统类型
-  OS_TYPE=$(uname -s)
-  
-  # 检查是否需要 sudo
-  if [[ $EUID -ne 0 ]]; then
-    SUDO_CMD="sudo"
-  else
-    SUDO_CMD=""
-  fi
-  
-  if [[ "$OS_TYPE" == "Darwin" ]]; then
-    if command -v brew &> /dev/null; then
-      brew install dsniff &> /dev/null
-    fi
-    return 0
-  fi
-  
-  # 检测 Linux 发行版并安装对应的包
-  if [ -f /etc/os-release ]; then
-    . /etc/os-release
-    DISTRO=$ID
-  elif [ -f /etc/redhat-release ]; then
-    DISTRO="rhel"
-  elif [ -f /etc/debian_version ]; then
-    DISTRO="debian"
-  else
-    return 0
-  fi
-  
-  case $DISTRO in
-    ubuntu|debian)
-      $SUDO_CMD apt update &> /dev/null
-      $SUDO_CMD apt install -y dsniff &> /dev/null
-      ;;
-    centos|rhel|fedora)
-      if command -v dnf &> /dev/null; then
-        $SUDO_CMD dnf install -y dsniff &> /dev/null
-      elif command -v yum &> /dev/null; then
-        $SUDO_CMD yum install -y dsniff &> /dev/null
-      fi
-      ;;
-    alpine)
-      $SUDO_CMD apk add --no-cache dsniff &> /dev/null
-      ;;
-    arch|manjaro)
-      $SUDO_CMD pacman -S --noconfirm dsniff &> /dev/null
-      ;;
-    opensuse*|sles)
-      $SUDO_CMD zypper install -y dsniff &> /dev/null
-      ;;
-    gentoo)
-      $SUDO_CMD emerge --ask=n net-analyzer/dsniff &> /dev/null
-      ;;
-    void)
-      $SUDO_CMD xbps-install -Sy dsniff &> /dev/null
-      ;;
-  esac
-  
-  return 0
-}
-
 
 # 获取用户输入的配置参数
 get_config_params() {
   if [[ -z "$SERVER_ADDR" || -z "$SECRET" ]]; then
     echo "请输入配置参数："
-    
-    if [[ -z "$SERVER_ADDR" ]]; then
-      read -p "服务器地址: " SERVER_ADDR
-    fi
-    
-    if [[ -z "$SECRET" ]]; then
-      read -p "密钥: " SECRET
-    fi
-    
-    if [[ -z "$SERVER_ADDR" || -z "$SECRET" ]]; then
-      echo "❌ 参数不完整，操作取消。"
-      exit 1
-    fi
+    [[ -n "$SERVER_ADDR" ]] || read -r -p "服务器地址: " SERVER_ADDR
+    [[ -n "$SECRET" ]] || read -r -p "密钥: " SECRET
+  fi
+  if [[ -z "$SERVER_ADDR" || -z "$SECRET" ]]; then
+    echo "❌ 参数不完整，操作取消。"
+    return 1
   fi
 }
 
-# 解析命令行参数
-while getopts "a:s:" opt; do
-  case $opt in
-    a) SERVER_ADDR="$OPTARG" ;;
-    s) SECRET="$OPTARG" ;;
-    *) echo "❌ 无效参数"; exit 1 ;;
+# 拒绝会改变 JSON 结构的配置值；节点地址和密钥本身不需要这些字符。
+validate_config_value() {
+  local value="$1"
+  case "$value" in
+    *'"'*|*\\*|*$'\n'*|*$'\r'*)
+      echo "❌ 配置参数包含不支持的引号、反斜杠或换行。"
+      return 1
+      ;;
   esac
-done
+}
+
+validate_panel_scheme() {
+  case "${GOST_PANEL_SCHEME:-http}" in
+    http|https) ;;
+    *) echo "❌ GOST_PANEL_SCHEME 只能是 http 或 https。"; return 1 ;;
+  esac
+}
+
+# 解析显式子命令的选项。
+parse_options() {
+  OPTIND=1
+  while getopts "a:s:y" opt; do
+    case $opt in
+      a) SERVER_ADDR="$OPTARG" ;;
+      s) SECRET="$OPTARG" ;;
+      y) ASSUME_YES=1 ;;
+      *) echo "❌ 无效参数"; return 2 ;;
+    esac
+  done
+  shift $((OPTIND - 1))
+  [[ $# -eq 0 ]] || { echo "❌ 未识别参数: $1"; return 2; }
+}
+
+show_help() {
+  cat <<'HELP'
+推荐：直接运行 ./install.sh，按数字菜单选择操作。
+
+用法：
+  ./install.sh install -a <面板地址> -s <节点密钥>
+  ./install.sh update
+  ./install.sh uninstall [-y]
+  ./install.sh block-protocol
+  ./install.sh help
+
+说明：
+  install    首次安装并创建 /etc/gost/config.json
+  update     只更新已校验的 gost 二进制，不覆盖现有配置
+  uninstall  停止服务并删除 /etc/gost（需要确认，-y 可跳过确认）
+  block-protocol  在入口节点屏蔽 http/tls/socks 协议
+  GOST_PANEL_SCHEME=https 可用于 HTTPS/WSS 面板连接
+
+直接运行 ./install.sh 会打开数字菜单；脚本不会自动删除自身。
+HELP
+}
 
 # 安装功能
 install_gost() {
   echo "🚀 开始安装 GOST..."
-  get_config_params
-
-  # 先检查平台及下载源，再修改现有服务或二进制
+  get_config_params || return $?
+  validate_config_value "$SERVER_ADDR" || return 1
+  validate_config_value "$SECRET" || return 1
+  validate_panel_scheme || return 1
   select_gost_asset || return 1
 
-    # 检查并安装 tcpkill
-  check_and_install_tcpkill
-  
-
   mkdir -p "$INSTALL_DIR"
-
   local new_binary
-  new_binary=$(mktemp "${INSTALL_DIR}/gost.new.XXXXXX")
+  new_binary=$(mktemp "${INSTALL_DIR}/gost.new.XXXXXX") || return 1
   if ! download_and_verify_gost "$new_binary"; then
     return 1
   fi
 
-  # 停止并禁用已有服务
   if systemctl list-units --full -all | grep -Fq "gost.service"; then
-    echo "🔍 检测到已存在的gost服务"
+    echo "🔍 检测到已存在的 gost 服务"
     systemctl stop gost 2>/dev/null && echo "🛑 停止服务"
     systemctl disable gost 2>/dev/null && echo "🚫 禁用自启"
   fi
 
-  # 下载校验成功后才原子替换旧文件
   mv -f "$new_binary" "$INSTALL_DIR/gost"
   echo "✅ 下载并校验完成"
-
-  # 打印版本
   echo "🔎 gost 版本：$($INSTALL_DIR/gost -V)"
 
-  # 写入 config.json (安装时总是创建新的)
   CONFIG_FILE="$INSTALL_DIR/config.json"
-  echo "📄 创建新配置: config.json"
-  cat > "$CONFIG_FILE" <<EOF
+  cat > "$CONFIG_FILE" <<CONFIG
 {
   "addr": "$SERVER_ADDR",
   "secret": "$SECRET"
 }
-EOF
+CONFIG
 
-  # 写入 gost.json
   GOST_CONFIG="$INSTALL_DIR/gost.json"
   if [[ -f "$GOST_CONFIG" ]]; then
     echo "⏭️ 跳过配置文件: gost.json (已存在)"
   else
-    echo "📄 创建新配置: gost.json"
-    cat > "$GOST_CONFIG" <<EOF
-{}
-EOF
+    printf '{}\n' > "$GOST_CONFIG"
   fi
-
-  # 加强权限
   chmod 600 "$INSTALL_DIR"/*.json
 
-  # 创建 systemd 服务
   SERVICE_FILE="/etc/systemd/system/gost.service"
-  cat > "$SERVICE_FILE" <<EOF
+  cat > "$SERVICE_FILE" <<SERVICE
 [Unit]
 Description=Gost Proxy Service
 After=network.target
@@ -244,160 +190,182 @@ After=network.target
 [Service]
 WorkingDirectory=$INSTALL_DIR
 ExecStart=$INSTALL_DIR/gost
+Environment=GOST_PANEL_SCHEME=${GOST_PANEL_SCHEME:-http}
 Restart=on-failure
+NoNewPrivileges=true
+PrivateTmp=true
+RestrictSUIDSGID=true
+LockPersonality=true
 
 [Install]
 WantedBy=multi-user.target
-EOF
+SERVICE
 
-  # 启动服务
   systemctl daemon-reload || return $?
   systemctl enable gost || return $?
   systemctl start gost || return $?
-
-  # 检查状态
   echo "🔄 检查服务状态..."
   if systemctl is-active --quiet gost; then
-    echo "✅ 安装完成，gost服务已启动并设置为开机启动。"
+    echo "✅ 安装完成，gost 服务已启动并设置为开机启动。"
     echo "📁 配置目录: $INSTALL_DIR"
-    echo "🔧 服务状态: $(systemctl is-active gost)"
   else
-    echo "❌ gost服务启动失败，请执行以下命令查看日志："
-    echo "journalctl -u gost -f"
+    echo "❌ gost 服务启动失败，请执行：journalctl -u gost -n 50 --no-pager"
     return 1
   fi
 }
 
-# 更新功能
+# 更新只替换二进制；不会重写 config.json、gost.json 或 systemd 安全选项。
 update_gost() {
   echo "🔄 开始更新 GOST..."
-  
-  if [[ ! -d "$INSTALL_DIR" ]]; then
-    echo "❌ GOST 未安装，请先选择安装。"
-    return 1
-  fi
-
+  [[ -d "$INSTALL_DIR" ]] || { echo "❌ GOST 未安装，请先执行 install。"; return 1; }
+  [[ -x "$INSTALL_DIR/gost" ]] || { echo "❌ 未找到现有 gost 二进制，请先执行 install。"; return 1; }
+  validate_panel_scheme || return 1
   select_gost_asset || return 1
-  
-  echo "📥 使用下载地址: $DOWNLOAD_URL"
-  
-  # 检查并安装 tcpkill
-  check_and_install_tcpkill
-  
-  # 先下载新版本
   echo "⬇️ 下载最新版本..."
   local new_binary
-  new_binary=$(mktemp "${INSTALL_DIR}/gost.new.XXXXXX")
+  new_binary=$(mktemp "${INSTALL_DIR}/gost.new.XXXXXX") || return 1
   if ! download_and_verify_gost "$new_binary"; then
     return 1
   fi
 
-  # 停止服务
-  if systemctl list-units --full -all | grep -Fq "gost.service"; then
-    echo "🛑 停止 gost 服务..."
-    systemctl stop gost
-  fi
-
-  # 替换文件
-  mv -f "$new_binary" "$INSTALL_DIR/gost"
-  
-  # 打印版本
-  echo "🔎 新版本：$($INSTALL_DIR/gost -V)"
-
-  # 重启服务
-  echo "🔄 重启服务..."
-  systemctl start gost || return $?
-  if ! systemctl is-active --quiet gost; then
-    echo "❌ gost服务启动失败，请执行以下命令查看日志："
-    echo "journalctl -u gost -f"
+  local previous_binary
+  previous_binary=$(mktemp "${INSTALL_DIR}/gost.rollback.XXXXXX") || return 1
+  if ! cp -p "$INSTALL_DIR/gost" "$previous_binary"; then
+    rm -f "$previous_binary"
+    echo "❌ 无法保存旧 gost 二进制，取消更新。"
     return 1
   fi
-  
-  echo "✅ 更新完成，服务已重新启动。"
+  if systemctl list-units --full -all | grep -Fq "gost.service"; then
+    local stop_status
+    if systemctl stop gost; then
+      :
+    else
+      stop_status=$?
+      rm -f "$previous_binary"
+      return "$stop_status"
+    fi
+  fi
+  mv -f "$new_binary" "$INSTALL_DIR/gost"
+  echo "🔎 新版本：$($INSTALL_DIR/gost -V)"
+  if [[ -n "${GOST_PANEL_SCHEME+x}" && -f /etc/systemd/system/gost.service ]]; then
+    if grep -q '^Environment=GOST_PANEL_SCHEME=' /etc/systemd/system/gost.service; then
+      sed -i "s#^Environment=GOST_PANEL_SCHEME=.*#Environment=GOST_PANEL_SCHEME=$GOST_PANEL_SCHEME#" /etc/systemd/system/gost.service
+    else
+      sed -i "/^ExecStart=/a Environment=GOST_PANEL_SCHEME=$GOST_PANEL_SCHEME" /etc/systemd/system/gost.service
+    fi
+    systemctl daemon-reload || return $?
+  fi
+  local start_status
+  if systemctl start gost; then
+    :
+  else
+    start_status=$?
+    mv -f "$previous_binary" "$INSTALL_DIR/gost"
+    systemctl start gost >/dev/null 2>&1 || true
+    echo "❌ 新 gost 无法启动，已恢复旧二进制。"
+    return "$start_status"
+  fi
+  if ! systemctl is-active --quiet gost; then
+    start_status=1
+    mv -f "$previous_binary" "$INSTALL_DIR/gost"
+    systemctl start gost >/dev/null 2>&1 || true
+    echo "❌ gost 服务启动失败，请执行：journalctl -u gost -n 50 --no-pager"
+    echo "ℹ️ 已恢复旧二进制，请检查服务日志。"
+    return "$start_status"
+  fi
+  rm -f "$previous_binary"
+  echo "✅ 更新完成，服务已重新启动；现有节点配置未修改。"
+}
+
+# 在入口节点屏蔽协议，不影响其他配置字段。
+block_protocol() {
+  local config_file="$INSTALL_DIR/config.json" temporary
+  [[ -f "$config_file" ]] || { echo "❌ 未找到 $config_file，请先安装 GOST。"; return 1; }
+  command -v python3 >/dev/null 2>&1 || { echo "❌ block-protocol 需要 Python 3。"; return 1; }
+  temporary=$(mktemp "${config_file}.new.XXXXXX") || return 1
+  if ! python3 - "$config_file" "$temporary" <<'PY'
+import json
+import os
+import sys
+
+source, destination = sys.argv[1:]
+with open(source, encoding="utf-8") as handle:
+    config = json.load(handle)
+for key in ("http", "tls", "socks"):
+    config[key] = 1
+with open(destination, "w", encoding="utf-8") as handle:
+    json.dump(config, handle, ensure_ascii=False, separators=(",", ":"))
+    handle.write("\n")
+os.chmod(destination, 0o600)
+PY
+  then
+    rm -f "$temporary"
+    echo "❌ config.json 不是有效 JSON，未修改配置。"
+    return 1
+  fi
+  mv -f "$temporary" "$config_file"
+  systemctl restart gost || return $?
+  echo "✅ 已屏蔽 http/tls/socks 协议并重启 gost。"
 }
 
 # 卸载功能
 uninstall_gost() {
   echo "🗑️ 开始卸载 GOST..."
-  
-  read -p "确认卸载 GOST 吗？此操作将删除所有相关文件 (y/N): " confirm
+  local confirm
+  if [[ "${ASSUME_YES:-0}" == "1" ]]; then
+    confirm="y"
+  else
+    read -r -p "确认卸载 GOST 吗？此操作将删除所有相关文件 (y/N): " confirm
+  fi
   if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
     echo "❌ 取消卸载"
     return 0
   fi
 
-  # 停止并禁用服务
   if systemctl list-units --full -all | grep -Fq "gost.service"; then
-    echo "🛑 停止并禁用服务..."
     systemctl stop gost 2>/dev/null
     systemctl disable gost 2>/dev/null
   fi
-
-  # 删除服务文件
-  if [[ -f "/etc/systemd/system/gost.service" ]]; then
-    rm -f "/etc/systemd/system/gost.service"
-    echo "🧹 删除服务文件"
-  fi
-
-  # 删除安装目录
-  if [[ -d "$INSTALL_DIR" ]]; then
-    rm -rf "$INSTALL_DIR"
-    echo "🧹 删除安装目录: $INSTALL_DIR"
-  fi
-
-  # 重载 systemd
+  rm -f "/etc/systemd/system/gost.service"
+  rm -rf "$INSTALL_DIR"
   systemctl daemon-reload
-
   echo "✅ 卸载完成"
 }
 
 # 主逻辑
 main() {
-  # 如果提供了命令行参数，直接执行安装
-  if [[ -n "$SERVER_ADDR" && -n "$SECRET" ]]; then
-    install_gost || return $?
-    delete_self
-    exit 0
+  local command="${1:-menu}"
+  if [[ "$command" != "menu" ]]; then
+    case "$command" in
+      install|update|uninstall|block-protocol|help) shift ;;
+      -h|--help) show_help; return 0 ;;
+      -a|-s) command="install" ;;
+      *) echo "❌ 未知命令: $command"; show_help; return 2 ;;
+    esac
   fi
 
-  # 显示交互式菜单
-  while true; do
-    show_menu
-    read -p "请输入选项 (1-5): " choice
-    
-    case $choice in
-      1)
-        install_gost || return $?
-        delete_self
-        exit 0
-        ;;
-      2)
-        update_gost || return $?
-        delete_self
-        exit 0
-        ;;
-      3)
-        uninstall_gost
-        delete_self
-        exit 0
-        ;;
-      4)
-        block_protocol
-        delete_self
-        exit 0
-        ;;
-      5)
-        echo "👋 退出脚本"
-        delete_self
-        exit 0
-        ;;
-      *)
-        echo "❌ 无效选项，请输入 1-5"
-        echo ""
-        ;;
-    esac
-  done
+  case "$command" in
+    help) show_help ;;
+    install) parse_options "$@" || return $?; install_gost ;;
+    update) parse_options "$@" || return $?; update_gost ;;
+    uninstall) parse_options "$@" || return $?; uninstall_gost ;;
+    block-protocol) parse_options "$@" || return $?; block_protocol ;;
+    menu)
+      while true; do
+        show_menu
+        read -r -p "请输入选项 (1-5): " choice
+        case "$choice" in
+          1) install_gost; return $? ;;
+          2) update_gost; return $? ;;
+          3) uninstall_gost; return $? ;;
+          4) block_protocol; return $? ;;
+          5) echo "👋 退出脚本"; return 0 ;;
+          *) echo "❌ 无效选项，请输入 1-5" ;;
+        esac
+      done
+      ;;
+  esac
 }
 
 # 执行主函数
-main
+main "$@"

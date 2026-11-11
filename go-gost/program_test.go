@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -50,6 +51,32 @@ func TestPanelConnectionStartsOnlyAfterRuntimeConfigIsLoaded(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("program lifecycle did not start the panel connection after loading config")
+	}
+}
+
+func TestRestartDoesNotListenOnPersistedPausedRule(t *testing.T) {
+	reservation, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	address := reservation.Addr().String()
+	reservation.Close()
+	prepareProgramConfig(t, "http://127.0.0.1:1", fmt.Sprintf(`{"services":[{"name":"paused-rule","addr":%q,"metadata":{"paused":true},"listener":{"type":"tcp"},"handler":{"type":"tcp"}}]}`, address))
+	p := &program{}
+	if err := p.Init(nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer p.Stop()
+	if !registry.ServiceRegistry().IsRegistered("paused-rule") {
+		t.Fatal("paused rule must remain resumable")
+	}
+	conn, err := net.DialTimeout("tcp", address, 100*time.Millisecond)
+	if err == nil {
+		conn.Close()
+		t.Fatal("persisted paused rule reopened its listener on restart")
 	}
 }
 

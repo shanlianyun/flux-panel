@@ -77,7 +77,11 @@ install_reverse_proxy() {
 }
 
 uninstall_panel() {
-  choose_directory uninstall
+  if [[ -n "${1:-}" ]]; then
+    cd -- "$1" || { echo "错误：部署目录不存在：$1" >&2; return 1; }
+  else
+    choose_directory uninstall
+  fi
   if [[ ! -f docker-compose.yml || -f .panel-transaction.json ]]; then
     echo "错误：缺少原配置或有未恢复的事务；禁止猜测配置卸载。" >&2
     return 1
@@ -91,6 +95,25 @@ uninstall_panel() {
   docker compose --project-directory "$PWD" -f docker-compose.yml down --rmi all --volumes --remove-orphans
   rm -f -- docker-compose.yml gost.sql .env
   echo "卸载完成；panel-backups 和本管理脚本已保留。"
+}
+
+show_help() {
+  cat <<'HELP'
+Flux Panel 管理脚本
+
+推荐：直接运行 `bash panel_install.sh`，按数字菜单选择操作。
+
+用法：
+  bash panel_install.sh install [--directory DIR] [--tag sha-<40位提交号>]
+  bash panel_install.sh migrate [--directory DIR] [--tag sha-<40位提交号>]
+  bash panel_install.sh update [--directory DIR] [--tag sha-<40位提交号>]
+  bash panel_install.sh backup [--directory DIR]
+  bash panel_install.sh recover [--directory DIR]
+  bash panel_install.sh uninstall [--directory DIR]
+  bash panel_install.sh proxy
+
+不带参数时打开交互菜单。更新和迁移会先备份，失败时保留恢复记录；不会自动删除本脚本。
+HELP
 }
 
 show_menu() {
@@ -108,7 +131,65 @@ show_menu() {
   echo "==============================================="
 }
 
+run_operation() {
+  local operation="$1" directory="${2:-$PWD}" tag="${3:-${PANEL_IMAGE_TAG:-}}"
+  cd -- "$directory" || { echo "错误：部署目录不存在：$directory" >&2; return 1; }
+  prepare_manager
+  local args=("$MANAGER_PATH" "$operation" --directory "$PWD")
+  [[ -n "$tag" ]] && args+=(--tag "$tag")
+  python3 "${args[@]}"
+}
+
+run_uninstall() {
+  local directory="${1:-$PWD}"
+  uninstall_panel "$directory"
+}
+
 main() {
+  local command="${1:-menu}" directory="" tag=""
+  if [[ "$command" != "menu" ]]; then
+    shift
+    case "$command" in
+      help|-h|--help)
+        show_help
+        return 0
+        ;;
+      proxy)
+        [[ $# -eq 0 ]] || { echo "错误：proxy 不接受额外参数。" >&2; return 2; }
+        install_reverse_proxy
+        return
+        ;;
+      install|migrate|update|backup|recover|uninstall)
+        while [[ $# -gt 0 ]]; do
+          case "$1" in
+            --directory)
+              [[ $# -ge 2 ]] || { echo "错误：--directory 缺少参数。" >&2; return 2; }
+              directory="$2"; shift 2
+              ;;
+            --tag)
+              [[ $# -ge 2 ]] || { echo "错误：--tag 缺少参数。" >&2; return 2; }
+              tag="$2"; shift 2
+              ;;
+            *) echo "错误：未知参数：$1" >&2; return 2 ;;
+          esac
+        done
+        directory="${directory:-$PWD}"
+        if [[ "$command" == "uninstall" ]]; then
+          [[ -z "$tag" ]] || { echo "错误：uninstall 不接受 --tag。" >&2; return 2; }
+          run_uninstall "$directory"
+        else
+          run_operation "$command" "$directory" "$tag"
+        fi
+        return
+        ;;
+      *)
+        echo "错误：未知命令：$command" >&2
+        show_help
+        return 2
+        ;;
+    esac
+  fi
+
   local choice
   while true; do
     show_menu
@@ -127,4 +208,4 @@ main() {
   done
 }
 
-main
+main "$@"

@@ -1,6 +1,7 @@
 package com.admin.common.task;
 
 import com.admin.common.utils.GostUtil;
+import com.admin.common.utils.ForwardRuleLock;
 import com.admin.entity.Forward;
 import com.admin.entity.Tunnel;
 import com.admin.entity.User;
@@ -199,9 +200,7 @@ public class ResetFlowAsync {
             for (Forward forward : forwardList) {
                 UserTunnel userTunnel = userTunnelService.getOne(new QueryWrapper<UserTunnel>().eq("user_id", forward.getUserId()).eq("tunnel_id", forward.getTunnelId()));
                 if (userTunnel != null) {
-                    pauseForwardService(forward, userTunnel.getId());
-                    forward.setStatus(0);
-                    forwardService.updateById(forward);
+                    pauseExpiredForward(forward, userTunnel.getId());
                 }
             }
             user.setStatus(0);
@@ -217,15 +216,24 @@ public class ResetFlowAsync {
         for (UserTunnel userTunnel : user_tunnel_list) {
             List<Forward> forwardList = forwardService.list(new QueryWrapper<Forward>().eq("tunnel_id", userTunnel.getTunnelId()).eq("user_id", userTunnel.getUserId()).eq("status", 1));
             for (Forward forward : forwardList) {
-                pauseForwardService(forward, userTunnel.getId());
-                forward.setStatus(0);
-                forwardService.updateById(forward);
+                pauseExpiredForward(forward, userTunnel.getId());
             }
             userTunnel.setStatus(0);
             userTunnelService.updateById(userTunnel);
         }
     }
 
+
+    private void pauseExpiredForward(Forward snapshot, Integer userTunnelId) {
+        synchronized (ForwardRuleLock.forRule(snapshot.getId())) {
+            Forward current = forwardService.getById(snapshot.getId());
+            if (current == null || !java.util.Objects.equals(current.getUserId(), snapshot.getUserId())
+                    || !java.util.Objects.equals(current.getTunnelId(), snapshot.getTunnelId())) return;
+            pauseForwardService(current, userTunnelId);
+            current.setStatus(0);
+            forwardService.updateById(current);
+        }
+    }
 
     private void pauseForwardService(Forward forward, Integer userTunnelId) {
         Tunnel tunnel = tunnelService.getById(forward.getTunnelId());
