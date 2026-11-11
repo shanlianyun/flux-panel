@@ -38,7 +38,7 @@ jobs:
 
       - name: Test node recovery and bounded logging
         working-directory: springboot-backend
-        run: mvn --batch-mode --no-transfer-progress -Dtest=NodeReconnectSyncTest,LoggingPolicyTest,ComposeLoggingTest,RoutineLoggingTest test
+        run: mvn --batch-mode --no-transfer-progress -Dtest=NodeInstallCommandTest,NodeReconnectSyncTest,LoggingPolicyTest,ComposeLoggingTest,RoutineLoggingTest test
 
       - name: Validate Compose configurations
         env:
@@ -76,7 +76,10 @@ jobs:
           (cd x && CGO_ENABLED=0 go test ./service)
 
       - name: Check shell syntax
-        run: bash -n panel_install.sh install.sh proxy.sh
+        run: |
+          for script in panel_install.sh install.sh node.sh proxy.sh; do
+            bash -n "$script"
+          done
 
       - name: Test panel management transactions (fake Docker and offline Compose)
         run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v
