@@ -54,6 +54,10 @@ func (p *program) Start() error {
 	if err != nil {
 		return err
 	}
+	// Load protocol detection settings only for startup, never for CLI version probes.
+	if _, err := xservice.LoadConfig("config.json"); err != nil {
+		return err
+	}
 	xservice.SetHTTPReportURL(panelConfig.Addr, panelConfig.Secret)
 
 	cfg, err := parser.Parse()

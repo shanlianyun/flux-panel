@@ -251,9 +251,9 @@ WantedBy=multi-user.target
 EOF
 
   # 启动服务
-  systemctl daemon-reload
-  systemctl enable gost
-  systemctl start gost
+  systemctl daemon-reload || return $?
+  systemctl enable gost || return $?
+  systemctl start gost || return $?
 
   # 检查状态
   echo "🔄 检查服务状态..."
@@ -264,6 +264,7 @@ EOF
   else
     echo "❌ gost服务启动失败，请执行以下命令查看日志："
     echo "journalctl -u gost -f"
+    return 1
   fi
 }
 
@@ -305,7 +306,12 @@ update_gost() {
 
   # 重启服务
   echo "🔄 重启服务..."
-  systemctl start gost
+  systemctl start gost || return $?
+  if ! systemctl is-active --quiet gost; then
+    echo "❌ gost服务启动失败，请执行以下命令查看日志："
+    echo "journalctl -u gost -f"
+    return 1
+  fi
   
   echo "✅ 更新完成，服务已重新启动。"
 }
@@ -349,7 +355,7 @@ uninstall_gost() {
 main() {
   # 如果提供了命令行参数，直接执行安装
   if [[ -n "$SERVER_ADDR" && -n "$SECRET" ]]; then
-    install_gost
+    install_gost || return $?
     delete_self
     exit 0
   fi
@@ -361,12 +367,12 @@ main() {
     
     case $choice in
       1)
-        install_gost
+        install_gost || return $?
         delete_self
         exit 0
         ;;
       2)
-        update_gost
+        update_gost || return $?
         delete_self
         exit 0
         ;;

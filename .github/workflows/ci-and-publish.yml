@@ -69,7 +69,10 @@ jobs:
 
       - name: Test gost startup readiness
         working-directory: go-gost
-        run: bash test_startup.sh
+        run: |
+          bash test_cli.sh
+          bash test_startup.sh
+          (cd x && CGO_ENABLED=0 go test ./service)
 
       - name: Check shell syntax
         run: bash -n panel_install.sh install.sh proxy.sh

@@ -21,6 +21,13 @@ jobs:
           go-version-file: go-gost/go.mod
           cache-dependency-path: go-gost/go.sum
 
+      - name: Test CLI probes and startup before publishing
+        working-directory: go-gost
+        run: |
+          bash test_cli.sh
+          bash test_startup.sh
+          (cd x && CGO_ENABLED=0 go test ./service)
+
       - name: Build Linux binaries and checksums
         working-directory: go-gost
         run: |
