@@ -40,6 +40,9 @@ import (
 )
 
 func ParseService(cfg *config.ServiceConfig) (service.Service, error) {
+	if cfg.Metadata["paused"] == true {
+		return xservice.NewPausedService(cfg.Addr), nil
+	}
 	if cfg.Listener == nil {
 		cfg.Listener = &config.ListenerConfig{}
 	}

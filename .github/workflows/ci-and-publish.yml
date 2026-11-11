@@ -72,6 +72,7 @@ jobs:
         run: |
           bash test_cli.sh
           bash test_startup.sh
+          CGO_ENABLED=0 go test github.com/go-gost/x/socket github.com/go-gost/x/api
           (cd x && CGO_ENABLED=0 go test ./service)
 
       - name: Check shell syntax

@@ -11,6 +11,7 @@ import (
 	parser "github.com/go-gost/x/config/parsing/service"
 	kill "github.com/go-gost/x/internal/util/port"
 	"github.com/go-gost/x/registry"
+	xservice "github.com/go-gost/x/service"
 )
 
 func createServices(req createServicesRequest) error {
@@ -33,6 +34,13 @@ func createServices(req createServicesRequest) error {
 		serviceConfig.Name = name
 
 		if registry.ServiceRegistry().IsRegistered(name) {
+			// Replay is add-only for healthy services, but a retained closed entry
+			// (including a persisted pause) is not a functioning listener.
+			if len(req.Data) == 1 {
+				if state, ok := registry.ServiceRegistry().Get(name).(interface{ Status() *xservice.Status }); ok && state.Status().State() == xservice.StateClosed {
+					return updateServices(updateServicesRequest{Data: []config.ServiceConfig{serviceConfig}})
+				}
+			}
 			return errors.New("service " + name + " already exists")
 		}
 
@@ -112,9 +120,6 @@ func updateServices(req updateServicesRequest) error {
 		// 2. 关闭旧服务
 		old.Close()
 
-		// 3. 从注册表移除旧服务
-		registry.ServiceRegistry().Unregister(name)
-
 		// 4. 解析新服务配置
 		svc, err := parser.ParseService(&serviceConfig)
 		if err != nil {
@@ -122,6 +127,7 @@ func updateServices(req updateServicesRequest) error {
 		}
 
 		// 5. 注册新服务
+		registry.ServiceRegistry().Unregister(name)
 		if err := registry.ServiceRegistry().Register(name, svc); err != nil {
 			svc.Close()
 			return errors.New("service " + name + " already exists")
@@ -386,19 +392,19 @@ func resumeServices(req resumeServicesRequest) error {
 	for _, str := range servicesToResume {
 		// 先关闭现有服务
 		str.service.Close()
-		registry.ServiceRegistry().Unregister(str.name)
 
 		// 等待端口释放
 		time.Sleep(100 * time.Millisecond)
 
 		// 重新解析并启动服务
-		svc, err := parser.ParseService(str.serviceConfig)
+		svc, err := parser.ParseResumedService(str.serviceConfig)
 		if err != nil {
 			// 恢复失败，回滚已恢复的服务
 			rollbackResumedServices(resumedServices)
 			return errors.New(fmt.Sprintf("resume service %s failed: %s", str.name, err.Error()))
 		}
 
+		registry.ServiceRegistry().Unregister(str.name)
 		if err := registry.ServiceRegistry().Register(str.name, svc); err != nil {
 			svc.Close()
 			// 恢复失败，回滚已恢复的服务
@@ -447,11 +453,12 @@ func rollbackPausedServices(pausedServices []struct {
 }) {
 	for _, pss := range pausedServices {
 		// 重新解析并启动服务
-		svc, err := parser.ParseService(pss.serviceConfig)
+		svc, err := parser.ParseResumedService(pss.serviceConfig)
 		if err != nil {
 			continue // 回滚失败，记录日志但继续处理其他服务
 		}
 
+		registry.ServiceRegistry().Unregister(pss.name)
 		if err := registry.ServiceRegistry().Register(pss.name, svc); err != nil {
 			svc.Close()
 			continue // 回滚失败，记录日志但继续处理其他服务

@@ -14,8 +14,12 @@ public class GostUtil {
 
 
     public static GostDto AddLimiters(Long node_id, Long name, String speed) {
+        return AddLimiters(node_id, null, name, speed);
+    }
+
+    public static GostDto AddLimiters(Long node_id, String sessionId, Long name, String speed) {
         JSONObject data = createLimiterData(name, speed);
-        return WebSocketServer.send_msg(node_id, data, "AddLimiters");
+        return WebSocketServer.send_msg(node_id, sessionId, data, "AddLimiters");
     }
 
     public static GostDto UpdateLimiters(Long node_id, Long name, String speed) {
@@ -43,22 +47,76 @@ public class GostUtil {
     }
 
     public static GostDto UpdateService(Long node_id, String name, Integer in_port, Integer limiter, String remoteAddr, Integer fow_type, Tunnel tunnel, String strategy, String interfaceName) {
+        return UpdateService(node_id, name, in_port, limiter, remoteAddr, fow_type, tunnel, strategy, interfaceName, false);
+    }
+
+    public static GostDto UpdateService(Long node_id, String name, Integer in_port, Integer limiter, String remoteAddr,
+                                        Integer fow_type, Tunnel tunnel, String strategy, String interfaceName, boolean paused) {
         JSONArray services = new JSONArray();
         String[] protocols = {"tcp", "udp"};
         for (String protocol : protocols) {
             JSONObject service = createServiceConfig(name, in_port, limiter, remoteAddr, protocol, fow_type, tunnel, strategy, interfaceName);
+            if (paused) {
+                JSONObject metadata = service.getJSONObject("metadata");
+                if (metadata == null) metadata = new JSONObject();
+                metadata.put("paused", true);
+                service.put("metadata", metadata);
+            }
             services.add(service);
         }
         return WebSocketServer.send_msg(node_id, services, "UpdateService");
     }
 
-    public static GostDto AddService(Long nodeId, String name, Integer inPort, Integer limiter,
+    public static GostDto AddService(Long nodeId, String sessionId, String name, Integer inPort, Integer limiter,
                                      String remoteAddr, Integer forwardType, Tunnel tunnel,
                                      String strategy, String interfaceName, String protocol) {
         JSONArray services = new JSONArray();
         services.add(createServiceConfig(name, inPort, limiter, remoteAddr, protocol,
                 forwardType, tunnel, strategy, interfaceName));
-        return WebSocketServer.send_msg(nodeId, services, "AddService");
+        return WebSocketServer.send_msg(nodeId, sessionId, services, "AddService");
+    }
+
+    public static GostDto DeleteNamedService(Long nodeId, String sessionId, String serviceName) {
+        JSONObject data = new JSONObject();
+        JSONArray services = new JSONArray();
+        services.add(serviceName);
+        data.put("services", services);
+        return WebSocketServer.send_msg(nodeId, sessionId, data, "DeleteService");
+    }
+
+    public static GostDto RetainPausedService(Long nodeId, String sessionId, String name, Integer inPort, Integer limiter,
+                                             String remoteAddr, Tunnel tunnel, String strategy, String interfaceName,
+                                             String protocol) {
+        return retainPausedService(nodeId, sessionId, createServiceConfig(name, inPort, limiter, remoteAddr,
+                protocol, tunnel.getType(), tunnel, strategy, interfaceName));
+    }
+
+    public static GostDto RetainPausedRemoteService(Long nodeId, String sessionId, String name, Integer outPort,
+                                                   String remoteAddr, String protocol, String strategy, String interfaceName) {
+        return retainPausedService(nodeId, sessionId, createRemoteServiceConfig(name, outPort, remoteAddr,
+                protocol, strategy, interfaceName));
+    }
+
+    private static GostDto retainPausedService(Long nodeId, String sessionId, JSONObject serviceConfig) {
+        String serviceName = serviceConfig.getString("name");
+        JSONObject data = new JSONObject();
+        JSONArray names = new JSONArray();
+        names.add(serviceName);
+        data.put("services", names);
+        if (!WebSocketServer.isCurrentNodeSession(nodeId, sessionId)) return null;
+        GostDto result = WebSocketServer.send_msg(nodeId, sessionId, data, "PauseService");
+        if (result == null || !("service " + serviceName + " not found").equals(result.getMsg())) return result;
+
+        // A replay can stop after creating only TCP. Retain the missing protocol
+        // without binding it so the normal batch resume remains usable later.
+        JSONObject metadata = serviceConfig.getJSONObject("metadata");
+        if (metadata == null) metadata = new JSONObject();
+        metadata.put("paused", true);
+        serviceConfig.put("metadata", metadata);
+        JSONArray services = new JSONArray();
+        services.add(serviceConfig);
+        if (!WebSocketServer.isCurrentNodeSession(nodeId, sessionId)) return null;
+        return WebSocketServer.send_msg(nodeId, sessionId, services, "AddService");
     }
 
     public static GostDto DeleteService(Long node_id, String name) {
@@ -71,6 +129,18 @@ public class GostUtil {
     }
 
     public static GostDto AddRemoteService(Long node_id, String name, Integer out_port, String remoteAddr,  String protocol, String strategy, String interfaceName) {
+        return AddRemoteService(node_id, null, name, out_port, remoteAddr, protocol, strategy, interfaceName);
+    }
+
+    public static GostDto AddRemoteService(Long node_id, String sessionId, String name, Integer out_port,
+                                          String remoteAddr, String protocol, String strategy, String interfaceName) {
+        JSONArray services = new JSONArray();
+        services.add(createRemoteServiceConfig(name, out_port, remoteAddr, protocol, strategy, interfaceName));
+        return WebSocketServer.send_msg(node_id, sessionId, services, "AddService");
+    }
+
+    private static JSONObject createRemoteServiceConfig(String name, Integer out_port, String remoteAddr,
+                                                        String protocol, String strategy, String interfaceName) {
         JSONObject data = new JSONObject();
         data.put("name", name + "_tls");
         data.put("addr", ":" + out_port);
@@ -111,9 +181,7 @@ public class GostUtil {
         forwarder.put("selector", selector);
 
         data.put("forwarder", forwarder);
-        JSONArray services = new JSONArray();
-        services.add(data);
-        return WebSocketServer.send_msg(node_id, services, "AddService");
+        return data;
     }
 
     public static GostDto UpdateRemoteService(Long node_id, String name, Integer out_port, String remoteAddr,String protocol, String strategy, String interfaceName) {
@@ -205,6 +273,11 @@ public class GostUtil {
     }
 
     public static GostDto AddChains(Long node_id, String name, String remoteAddr, String protocol, String interfaceName) {
+        return AddChains(node_id, null, name, remoteAddr, protocol, interfaceName);
+    }
+
+    public static GostDto AddChains(Long node_id, String sessionId, String name, String remoteAddr,
+                                   String protocol, String interfaceName) {
         JSONObject dialer = new JSONObject();
         dialer.put("type", protocol);
         if (Objects.equals(protocol, "quic")){
@@ -245,7 +318,7 @@ public class GostUtil {
         data.put("name", name + "_chains");
         data.put("hops", hops);
 
-        return WebSocketServer.send_msg(node_id, data, "AddChains");
+        return WebSocketServer.send_msg(node_id, sessionId, data, "AddChains");
     }
 
     public static GostDto UpdateChains(Long node_id, String name, String remoteAddr, String protocol, String interfaceName) {
@@ -293,9 +366,13 @@ public class GostUtil {
     }
 
     public static GostDto DeleteChains(Long node_id, String name) {
+        return DeleteChains(node_id, null, name);
+    }
+
+    public static GostDto DeleteChains(Long node_id, String sessionId, String name) {
         JSONObject data = new JSONObject();
         data.put("chain", name + "_chains");
-        return WebSocketServer.send_msg(node_id, data, "DeleteChains");
+        return WebSocketServer.send_msg(node_id, sessionId, data, "DeleteChains");
     }
 
     private static JSONObject createLimiterData(Long name, String speed) {

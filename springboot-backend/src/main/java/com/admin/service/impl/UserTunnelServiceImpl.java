@@ -13,6 +13,7 @@ import com.admin.service.UserTunnelService;
 import com.admin.service.ForwardService;
 import com.admin.service.NodeService;
 import com.admin.common.utils.GostUtil;
+import com.admin.common.utils.ForwardRuleLock;
 import com.admin.entity.Forward;
 import com.admin.entity.Tunnel;
 import com.admin.entity.Node;
@@ -150,6 +151,16 @@ public class UserTunnelServiceImpl extends ServiceImpl<UserTunnelMapper, UserTun
      */
     @Override
     public R updateUserTunnel(UserTunnelUpdateDto updateDto) {
+        UserTunnel grant = this.getById(updateDto.getId());
+        if (grant == null) return R.err(ERROR_USER_TUNNEL_NOT_EXISTS);
+        List<Forward> forwards = forwardService.list(new QueryWrapper<Forward>()
+                .eq("user_id", grant.getUserId()).eq("tunnel_id", grant.getTunnelId()));
+        List<Long> ids = new java.util.ArrayList<>();
+        for (Forward forward : forwards) ids.add(forward.getId());
+        return ForwardRuleLock.withRules(ids, () -> updateUserTunnelLocked(updateDto, forwards));
+    }
+
+    private R updateUserTunnelLocked(UserTunnelUpdateDto updateDto, List<Forward> lockedForwards) {
         // 1. 验证用户隧道权限是否存在
         UserTunnel existingUserTunnel = this.getById(updateDto.getId());
         if (existingUserTunnel == null) {
@@ -168,7 +179,7 @@ public class UserTunnelServiceImpl extends ServiceImpl<UserTunnelMapper, UserTun
         if (success) {
             // 6. 如果限速规则发生变化，更新该用户隧道下的所有转发
             if (speedChanged) {
-                updateUserTunnelForwardsSpeed(existingUserTunnel.getUserId(), existingUserTunnel.getTunnelId(), updateDto.getSpeedId());
+                updateUserTunnelForwardsSpeed(existingUserTunnel.getUserId(), existingUserTunnel.getTunnelId(), updateDto.getSpeedId(), lockedForwards);
             }
             
             return R.ok(SUCCESS_UPDATE_MSG);
@@ -269,11 +280,13 @@ public class UserTunnelServiceImpl extends ServiceImpl<UserTunnelMapper, UserTun
 
             for (Forward forward : userTunnelForwards) {
                 try {
-                    // 先调用GostUtil删除/停止服务
-                    stopForwardService(forward, userId, userTunnel != null ? userTunnel.getId() : 0);
-
-                    // 然后删除数据库记录
-                    forwardService.removeById(forward.getId());
+                    synchronized (ForwardRuleLock.forRule(forward.getId())) {
+                        Forward current = forwardService.getById(forward.getId());
+                        if (current == null || !java.util.Objects.equals(current.getUserId(), userId)
+                                || !java.util.Objects.equals(current.getTunnelId(), tunnelId)) continue;
+                        stopForwardService(current, userId, userTunnel != null ? userTunnel.getId() : 0);
+                        forwardService.removeById(current.getId());
+                    }
 
                 } catch (Exception e) {
                     // 单个转发删除失败，记录错误但继续处理其他转发
@@ -401,11 +414,8 @@ public class UserTunnelServiceImpl extends ServiceImpl<UserTunnelMapper, UserTun
      * @param tunnelId 隧道ID
      * @param speedId 新的限速规则ID
      */
-    private void updateUserTunnelForwardsSpeed(Integer userId, Integer tunnelId, Integer speedId) {
-        // 1. 查询该用户在该隧道下的所有转发
-        QueryWrapper<Forward> queryWrapper = new QueryWrapper<>();
-        queryWrapper.eq("user_id", userId).eq("tunnel_id", tunnelId);
-        List<Forward> userTunnelForwards = forwardService.list(queryWrapper);
+    private void updateUserTunnelForwardsSpeed(Integer userId, Integer tunnelId, Integer speedId, List<Forward> userTunnelForwards) {
+        // Process only the initial locked IDs; expanding the lock set here can invert lock order.
 
         if (userTunnelForwards.isEmpty()) {
             return;
@@ -431,7 +441,10 @@ public class UserTunnelServiceImpl extends ServiceImpl<UserTunnelMapper, UserTun
         }
 
         // 5. 批量更新该用户在该隧道下所有转发的限速配置（只更新入口节点）
-        for (Forward forward : userTunnelForwards) {
+        for (Forward snapshot : userTunnelForwards) {
+            Forward forward = forwardService.getById(snapshot.getId());
+            if (forward == null || !java.util.Objects.equals(forward.getUserId(), userId)
+                    || !java.util.Objects.equals(forward.getTunnelId(), tunnelId)) continue;
             String serviceName = buildServiceName(forward.getId(), Long.valueOf(userId), userTunnel.getId());
 
             String interfaceName = null;
@@ -441,7 +454,7 @@ public class UserTunnelServiceImpl extends ServiceImpl<UserTunnelMapper, UserTun
             }
 
             // 6. 更新入口节点的主服务限速配置（使用批量UpdateService接口）
-            GostUtil.UpdateService(inNode.getId(), serviceName, forward.getInPort(), speedId, forward.getRemoteAddr(), tunnel.getType(), tunnel, forward.getStrategy(), interfaceName);
+            GostUtil.UpdateService(inNode.getId(), serviceName, forward.getInPort(), speedId, forward.getRemoteAddr(), tunnel.getType(), tunnel, forward.getStrategy(), interfaceName, !java.util.Objects.equals(forward.getStatus(), 1));
         }
     }
 }

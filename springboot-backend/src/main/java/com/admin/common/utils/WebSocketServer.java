@@ -441,6 +441,11 @@ public class WebSocketServer extends TextWebSocketHandler {
     }
 
     public static GostDto send_msg(Long node_id, Object msg, String type) {
+        return send_msg(node_id, null, msg, type);
+    }
+
+    public static GostDto send_msg(Long node_id, String expectedSessionId, Object msg, String type) {
+        // Capture once: reconnect work must never be redirected to a replacement session.
         WebSocketSession nodeSession = nodeSessions.get(node_id);
 
         if (nodeSession == null) {
@@ -450,9 +455,15 @@ public class WebSocketServer extends TextWebSocketHandler {
             return result;
         }
 
+        if (expectedSessionId != null && !Objects.equals(expectedSessionId, nodeSession.getId())) {
+            GostDto result = new GostDto();
+            result.setMsg("Node session changed");
+            return result;
+        }
+
         if (!nodeSession.isOpen()) {
             log.info("发送消息失败：节点 {} 连接已断开，清理会话", node_id);
-            nodeSessions.remove(node_id);
+            nodeSessions.remove(node_id, nodeSession);
             sessionLocks.remove(nodeSession.getId());
             GostDto result = new GostDto();
             result.setMsg("节点连接已断开");
