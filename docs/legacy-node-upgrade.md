@@ -21,7 +21,25 @@ curl --fail --location --retry 3 https://raw.githubusercontent.com/shanlianyun/f
 
 检查该节点实际承担的 TCP/UDP、入口/出口转发，以及暂停、恢复、节点重启后暂停状态。再仅断开测试面板控制通道，验证已有连接与新连接继续转发；面板恢复后验证自动重连和有效规则同步。全部通过再逐台升级，避免同时重启所有入口/出口节点。
 
-若要迁移到 HTTPS/WSS，先配置有效证书及反向代理，再通过 `GOST_PANEL_SCHEME=https bash flux-node.sh` 打开同一个菜单选 `2`。此处是已有节点的维护方式：`/etc/gost/config.json` 的 `addr` 仍保存不带协议的地址；不要直接把完整 URL 写入该文件。面板“节点连接地址”则应保存带 `http://` 或 `https://` 的完整入口，供以后生成新安装命令，复制的命令会自动拆分协议与地址。修改面板设置不会自动改变已有节点。旧节点全部迁移验证后，才可关闭旧 HTTP/WS 通道。
+## 数字菜单迁移 HTTPS/WSS
+
+先配置有效证书及支持 WebSocket 的后端反向代理。已完成程序更新的旧节点，重新下载上面的管理脚本后：
+
+1. 选 **`6. 修改面板连接地址 / 迁移 HTTPS`**。
+2. 输入完整新入口，例如 `https://node.example.com:443`，不要带路径或结尾斜杠。
+3. 核对旧、新入口，输入 `y` 确认；节点重启可能短暂中断当前连接。
+
+不需要重复选 `2`，也不用填密钥、手改文件或卸载重装。菜单 `6` 不下载/替换二进制，只修改 `config.json` 中的 `addr`，并通过专用 `99-flux-panel-endpoint.conf` drop-in 保存 `GOST_PANEL_SCHEME`。节点密钥、其他 JSON 字段、`gost.json` 转发规则、原 unit 和自定义 drop-in 保持不变。普通菜单 `2` 默认保留地址与协议。
+
+迁移需要 Python 3、curl、systemd。脚本先验证 TLS 证书和 `/flow/test` 的 HTTP 200 / `test` 响应，不通过则不重启原服务。通过后创建权限 `700` 的 `/etc/gost/endpoint-backup.*` 备份目录，再切换并验证本次启动的真实节点 WebSocket 会话；握手失败、启动失败或约 30 秒未确认连接会恢复原配置并尝试重启原服务。若服务依赖自定义 `EnvironmentFile`、协议被其他 drop-in 覆盖或托管路径包含自定义内容，脚本会拒绝迁移，不会覆盖用户配置。
+
+面板“节点连接地址”仍应保存完整 HTTPS 入口，供以后生成新节点命令；修改面板设置不会自动改变已有节点。先灰度一台，验证在线、入口/出口 TCP/UDP 及流量上报，再逐台迁移；全部通过后才可关闭旧 HTTP/WS 通道。显式输入 HTTP 入口时须另外输入 `HTTP` 确认明文连接，不会自动从 HTTPS 降级。
+
+## 迁移中断或回退失败
+
+备份包含密钥，不要公开分享。每次迁移的目录会在终端显示，内含原 `config.json`，若迁移前已有专用 drop-in，还会有原 `endpoint.conf`。脚本只回退它修改的这两处，不改节点规则文件、二进制或其他 systemd 配置。恢复服务成功仅表示进程运行，仍须检查旧入口及实际转发。
+
+正常报错和可捕获的中断会尝试回退；断电、`kill -9` 或文件系统故障无法保证自动恢复。此时不要直接重试、卸载或删除备份：先确认没有仍在执行的迁移进程，再核对本次备份。由管理员将备份的 `config.json` 恢复到 `/etc/gost/config.json`；若有 `endpoint.conf` 则恢复到 `/etc/systemd/system/gost.service.d/99-flux-panel-endpoint.conf`，若没有则仅删除本次新建的该专用文件，保留其余自定义配置。随后执行 `systemctl daemon-reload`、`systemctl restart gost`，检查日志与实际转发；确认恢复完成后再移除空的 `/etc/gost/.endpoint-migration.lock` 目录。不要在不了解备份来源时自动恢复或批量重试。
 
 ## 有限兼容，不误启用暂停规则
 

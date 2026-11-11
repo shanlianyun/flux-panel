@@ -34,3 +34,29 @@ NODE_INSTALL_E2E_GOST=/tmp/node-install-gost \
 
 Without `NODE_INSTALL_E2E_GOST`, this optional integration class is skipped by
 ordinary Maven runs; CI explicitly builds the binary and executes the class.
+
+## Existing-node endpoint migration
+
+`test_node_endpoint_migration.py` executes the real Bash transaction with isolated
+files and fake systemd/network boundaries. It covers validation/cancel, secure
+backups and preservation, conflicting overrides, TLS preflight failure, stale or
+wrong-endpoint connection logs, handshake/timeout/restart failures, signals,
+partial renames and rollback. Run with ordinary Python unittest discovery.
+
+`node_endpoint_e2e.py` additionally starts a real already-connected GOST process,
+then uses menu `6` and real curl against local HTTP/WSS servers. It verifies trusted
+HTTPS migration with no extra authenticated session, rejected WSS rollback to the
+old panel, and untrusted TLS rejection without restarting the original node.
+Only systemd/journald are process adapters; this is not a real-systemd or aaPanel
+test. It runs in Linux CI after the existing install E2E tests:
+
+```bash
+python3 tests/node_endpoint_e2e.py /tmp/node-install-gost
+```
+
+On macOS, rebuild the Dockerfile above (now includes curl), then run:
+
+```bash
+docker run --rm -v "$PWD:/workspace:ro" -v /tmp/node-install-gost:/tmp/gost:ro \
+  -w /workspace flux-node-install-test python3 tests/node_endpoint_e2e.py /tmp/gost
+```
