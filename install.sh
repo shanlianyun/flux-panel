@@ -57,7 +57,7 @@ download_and_verify_gost() {
 
 
 
-# 显示菜单。数字选项保留用于兼容旧安装流程；自动化建议使用显式子命令。
+# 显示菜单。数字菜单是节点日常管理的推荐入口。
 show_menu() {
   echo "==============================================="
   echo "              管理脚本"
@@ -66,7 +66,8 @@ show_menu() {
   echo "1. 安装"
   echo "2. 更新"
   echo "3. 卸载"
-  echo "4. 退出"
+  echo "4. 屏蔽 http/tls/socks 协议"
+  echo "5. 退出"
   echo "==============================================="
 }
 
@@ -118,6 +119,8 @@ parse_options() {
 
 show_help() {
   cat <<'HELP'
+推荐：直接运行 ./install.sh，按数字菜单选择操作。
+
 用法：
   ./install.sh install -a <面板地址> -s <节点密钥>
   ./install.sh update
@@ -132,7 +135,7 @@ show_help() {
   block-protocol  在入口节点屏蔽 http/tls/socks 协议
   GOST_PANEL_SCHEME=https 可用于 HTTPS/WSS 面板连接
 
-不带子命令时仍会打开旧版数字菜单；脚本不会自动删除自身。
+直接运行 ./install.sh 会打开数字菜单；脚本不会自动删除自身。
 HELP
 }
 
@@ -350,13 +353,14 @@ main() {
     menu)
       while true; do
         show_menu
-        read -r -p "请输入选项 (1-4): " choice
+        read -r -p "请输入选项 (1-5): " choice
         case "$choice" in
           1) install_gost; return $? ;;
           2) update_gost; return $? ;;
           3) uninstall_gost; return $? ;;
-          4) echo "👋 退出脚本"; return 0 ;;
-          *) echo "❌ 无效选项，请输入 1-4" ;;
+          4) block_protocol; return $? ;;
+          5) echo "👋 退出脚本"; return 0 ;;
+          *) echo "❌ 无效选项，请输入 1-5" ;;
         esac
       done
       ;;

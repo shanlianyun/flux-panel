@@ -135,14 +135,10 @@ fork 的 [`gost-latest` Release](https://github.com/shanlianyun/flux-panel/relea
 
 ### 节点脚本与滚动更新
 
-节点安装命令应从面板“节点管理”页面复制。脚本现在支持以下明确命令：
+节点安装命令应从面板“节点管理”页面复制。已有节点下载脚本后直接运行数字菜单：
 
 ```bash
-./install.sh install -a '<面板地址:6365>' -s '<节点密钥>'
-./install.sh update
-./install.sh uninstall
-./install.sh block-protocol
-./install.sh help
+./install.sh
 ```
 
-已有旧节点请使用 `update`，不要重新执行 `install`；更新会保留 `/etc/gost/config.json` 和 `/etc/gost/gost.json`，只在下载文件通过 SHA-256 与版本检查后替换二进制。若新二进制无法启动，脚本会恢复旧二进制。更新期间 GOST 会短暂重启，因此应先灰度一台节点，再按批次滚动更新，并在每台节点执行 `systemctl is-active gost`、`gost -V` 和实际转发检查。公网面板请在 TLS 反向代理就绪后设置 `GOST_PANEL_SCHEME=https`。
+已有旧节点选择菜单 `2` 更新，不要选择 `1` 覆盖配置；更新会保留 `/etc/gost/config.json` 和 `/etc/gost/gost.json`，只在下载文件通过 SHA-256 与版本检查后替换二进制。若新二进制无法启动，脚本会恢复旧二进制。更新期间 GOST 会短暂重启，因此应先灰度一台节点，再按批次滚动更新，并在每台节点执行 `systemctl is-active gost`、`gost -V` 和实际转发检查。公网面板请在 TLS 反向代理就绪后设置 `GOST_PANEL_SCHEME=https`。

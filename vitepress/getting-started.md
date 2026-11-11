@@ -53,28 +53,25 @@ chmod 600 /原部署目录/.env
 
 失败时会尝试回退容器与配置，不会自动覆盖数据库。基础健康检查不能替代登录、WebSocket、节点心跳、隧道及流量验证。备份包含敏感数据库信息，应另存到服务器外。完整支持范围和恢复说明见[原作者版本迁移指南](https://github.com/shanlianyun/flux-panel/blob/main/docs/migrate-from-original.md)。
 
-管理脚本也支持非交互命令：
+管理脚本默认使用数字菜单，直接运行即可：
 
 ```bash
-bash panel_install.sh update --directory /root/flux-panel
-bash panel_install.sh backup --directory /root/flux-panel
-bash panel_install.sh recover --directory /root/flux-panel
-bash panel_install.sh help
+bash panel_install.sh
 ```
 
-维护脚本会保留自身；更新或迁移中断时，先使用 `recover` 恢复容器和配置，再处理业务验证。
+按菜单选择：已迁移系统选 `2` 更新，原作者系统选 `7` 迁移，单独备份选 `4`，中断恢复选 `8`。维护脚本会保留自身；更新或迁移中断时，先选 `8` 恢复容器和配置，再处理业务验证。
 
 ## 节点安装与滚动更新
 
 创建节点后，从面板“节点管理”复制安装命令，在节点服务器执行。命令使用临时文件下载并校验脚本，不会把节点密钥写入项目文件，也不会自动删除当前目录中的其他文件。
 
-已有节点不要重复执行安装命令覆盖配置，使用：
+已有节点不要重复执行安装命令覆盖配置。下载脚本后直接运行：
 
 ```bash
-./install.sh update
+./install.sh
 ```
 
-更新只替换通过 SHA-256 和版本检查的 GOST 二进制，保留 `/etc/gost/config.json`、`/etc/gost/gost.json`，并短暂重启 `gost` 服务；新二进制启动失败时会恢复旧二进制。建议先灰度一台节点，确认转发和节点心跳正常后，再逐台滚动更新。公网面板先配置 TLS 反向代理，然后使用 `GOST_PANEL_SCHEME=https ./install.sh update`。
+选择菜单 `2` 更新。更新只替换通过 SHA-256 和版本检查的 GOST 二进制，保留 `/etc/gost/config.json`、`/etc/gost/gost.json`，并短暂重启 `gost` 服务；新二进制启动失败时会恢复旧二进制。建议先灰度一台节点，确认转发和节点心跳正常后，再逐台滚动更新。公网面板先配置 TLS 反向代理；自动化更新时才使用 `GOST_PANEL_SCHEME=https ./install.sh update`。
 
 面板维护期间，节点本地已运行的转发规则不会因为控制通道断开而停止；新增、编辑、暂停和删除操作需等面板恢复。节点会自动重连并重新同步有效规则。
 

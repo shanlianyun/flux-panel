@@ -16,38 +16,34 @@ curl --fail --location --retry 3 https://raw.githubusercontent.com/shanlianyun/f
 
 需要 Python 3.8+ 和 Docker Compose v2。迁移指南说明[支持范围、备份及失败恢复](https://github.com/shanlianyun/flux-panel/blob/main/docs/migrate-from-original.md)。如果系统结构或运行配置不受支持，菜单会停止，不要通过重新安装绕过检查。
 
-管理脚本也支持非交互命令，适合维护窗口和自动化：
+管理脚本默认使用数字菜单，直接运行即可：
 
 ```bash
-bash panel_install.sh install --directory /root/flux-panel
-bash panel_install.sh update --directory /root/flux-panel
-bash panel_install.sh backup --directory /root/flux-panel
-bash panel_install.sh recover --directory /root/flux-panel
-bash panel_install.sh help
+bash panel_install.sh
 ```
 
-`update` 和 `migrate` 会在替换前备份并执行健康检查；出现中断时使用 `recover`，不要直接卸载或删除数据卷。`--tag` 可指定已经发布且验证过的 `sha-<40位提交号>` 镜像，脚本拒绝 `latest`。
+按菜单选择：`1` 全新安装、`2` 更新 fork、`4` 备份、`7` 旧版迁移、`8` 恢复中断操作。更新和迁移会在替换前备份并执行健康检查；出现中断时选择 `8`，不要直接卸载或删除数据卷。命令行子命令和 `--tag` 仅供自动化维护使用。
 
 ## 节点管理脚本
 
-在面板的“节点管理”页面复制安装命令。新脚本支持明确的子命令，执行完成后不会删除脚本文件：
+在面板的“节点管理”页面复制安装命令。新节点执行面板复制的命令即可；已有节点下载脚本后直接运行数字菜单：
 
 ```bash
-# 已有节点升级（不会覆盖 config.json 或 gost.json）
-./install.sh update
-
-# 卸载（默认会再次确认）
-./install.sh uninstall
-./install.sh uninstall -y
-
-# 入口节点屏蔽 http/tls/socks
-./install.sh block-protocol
-
-# 查看帮助
-./install.sh help
+# 打开节点管理菜单
+./install.sh
 ```
 
-旧版数字菜单仍可直接运行 `./install.sh`，但不要用“安装”代替已有节点的 `update`。更新会短暂停止并重启 GOST；建议先选择一台灰度节点验证，再分批更新其他节点。下载校验失败或新二进制无法启动时，脚本会保留/恢复旧二进制。
+菜单选项：
+
+```text
+1. 安装
+2. 更新
+3. 卸载
+4. 屏蔽 http/tls/socks 协议
+5. 退出
+```
+
+脚本执行完成后不会删除自身。已有节点选择 `2` 更新，不要选择 `1` 覆盖配置。更新会短暂停止并重启 GOST；建议先选择一台灰度节点验证，再分批更新其他节点。下载校验失败或新二进制无法启动时，脚本会保留/恢复旧二进制。
 
 公网面板必须先配置 TLS 反向代理，再在安装或更新命令前设置：
 

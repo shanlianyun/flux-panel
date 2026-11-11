@@ -101,6 +101,8 @@ show_help() {
   cat <<'HELP'
 Flux Panel 管理脚本
 
+推荐：直接运行 `bash panel_install.sh`，按数字菜单选择操作。
+
 用法：
   bash panel_install.sh install [--directory DIR] [--tag sha-<40位提交号>]
   bash panel_install.sh migrate [--directory DIR] [--tag sha-<40位提交号>]
