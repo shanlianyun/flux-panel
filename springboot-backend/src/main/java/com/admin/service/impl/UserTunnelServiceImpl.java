@@ -1,5 +1,6 @@
 package com.admin.service.impl;
 
+import com.admin.common.dto.GostDto;
 import com.admin.common.dto.UserTunnelDto;
 import com.admin.common.dto.UserTunnelQueryDto;
 import com.admin.common.dto.UserTunnelUpdateDto;
@@ -13,6 +14,7 @@ import com.admin.service.UserTunnelService;
 import com.admin.service.ForwardService;
 import com.admin.service.NodeService;
 import com.admin.common.utils.GostUtil;
+import com.admin.common.utils.WebSocketServer;
 import com.admin.common.utils.ForwardRuleLock;
 import com.admin.entity.Forward;
 import com.admin.entity.Tunnel;
@@ -169,6 +171,19 @@ public class UserTunnelServiceImpl extends ServiceImpl<UserTunnelMapper, UserTun
         
         // 2. 检查是否更新了限速规则
         boolean speedChanged = hasSpeedChanged(existingUserTunnel.getSpeedId(), updateDto.getSpeedId());
+        if (speedChanged) {
+            // Reject before saving: old nodes cannot change paused config without reopening it.
+            for (Forward snapshot : lockedForwards) {
+                Forward current = forwardService.getById(snapshot.getId());
+                if (current == null || !java.util.Objects.equals(current.getUserId(), existingUserTunnel.getUserId())
+                        || !java.util.Objects.equals(current.getTunnelId(), existingUserTunnel.getTunnelId())
+                        || java.util.Objects.equals(current.getStatus(), 1)) continue;
+                Tunnel tunnel = tunnelService.getById(current.getTunnelId());
+                if (tunnel == null || !WebSocketServer.supportsPausedServices(tunnel.getInNodeId())) {
+                    return R.err("节点未连接或不支持安全更新暂停规则，请先升级入口节点并确认在线，再修改限速");
+                }
+            }
+        }
         
         // 3. 更新用户隧道权限属性
         updateUserTunnelProperties(existingUserTunnel, updateDto);
@@ -179,7 +194,8 @@ public class UserTunnelServiceImpl extends ServiceImpl<UserTunnelMapper, UserTun
         if (success) {
             // 6. 如果限速规则发生变化，更新该用户隧道下的所有转发
             if (speedChanged) {
-                updateUserTunnelForwardsSpeed(existingUserTunnel.getUserId(), existingUserTunnel.getTunnelId(), updateDto.getSpeedId(), lockedForwards);
+                R syncResult = updateUserTunnelForwardsSpeed(existingUserTunnel.getUserId(), existingUserTunnel.getTunnelId(), updateDto.getSpeedId(), lockedForwards);
+                if (syncResult.getCode() != 0) return R.err("权限已保存，但节点限速同步失败：" + syncResult.getMsg());
             }
             
             return R.ok(SUCCESS_UPDATE_MSG);
@@ -414,30 +430,30 @@ public class UserTunnelServiceImpl extends ServiceImpl<UserTunnelMapper, UserTun
      * @param tunnelId 隧道ID
      * @param speedId 新的限速规则ID
      */
-    private void updateUserTunnelForwardsSpeed(Integer userId, Integer tunnelId, Integer speedId, List<Forward> userTunnelForwards) {
+    private R updateUserTunnelForwardsSpeed(Integer userId, Integer tunnelId, Integer speedId, List<Forward> userTunnelForwards) {
         // Process only the initial locked IDs; expanding the lock set here can invert lock order.
 
         if (userTunnelForwards.isEmpty()) {
-            return;
+            return R.ok();
         }
 
         // 2. 获取隧道信息
         Tunnel tunnel = tunnelService.getById(tunnelId);
         if (tunnel == null) {
-            return;
+            return R.err("转发关联的隧道、权限或入口节点不存在");
         }
 
         // 3. 获取用户隧道权限信息
         UserTunnel userTunnel = getUserTunnelByUserAndTunnel(userId, tunnelId);
         if (userTunnel == null) {
-            return;
+            return R.err("转发关联的隧道、权限或入口节点不存在");
         }
 
         // 4. 获取入口节点信息
         Node inNode = nodeService.getById(tunnel.getInNodeId());
 
         if (inNode == null) {
-            return;
+            return R.err("转发关联的隧道、权限或入口节点不存在");
         }
 
         // 5. 批量更新该用户在该隧道下所有转发的限速配置（只更新入口节点）
@@ -454,7 +470,11 @@ public class UserTunnelServiceImpl extends ServiceImpl<UserTunnelMapper, UserTun
             }
 
             // 6. 更新入口节点的主服务限速配置（使用批量UpdateService接口）
-            GostUtil.UpdateService(inNode.getId(), serviceName, forward.getInPort(), speedId, forward.getRemoteAddr(), tunnel.getType(), tunnel, forward.getStrategy(), interfaceName, !java.util.Objects.equals(forward.getStatus(), 1));
+            GostDto result = GostUtil.UpdateService(inNode.getId(), serviceName, forward.getInPort(), speedId, forward.getRemoteAddr(), tunnel.getType(), tunnel, forward.getStrategy(), interfaceName, !java.util.Objects.equals(forward.getStatus(), 1));
+            if (result == null || !"OK".equals(result.getMsg())) {
+                return R.err(result == null ? "节点无响应" : result.getMsg());
+            }
         }
+        return R.ok();
     }
 }

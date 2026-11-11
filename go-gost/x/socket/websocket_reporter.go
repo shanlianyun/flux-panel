@@ -206,6 +206,7 @@ func (w *WebSocketReporter) connect() error {
 
 	headers := make(http.Header)
 	headers.Set("X-Node-Secret", w.secret)
+	headers.Set("X-Node-Capabilities", "paused-services-v1")
 	conn, _, err := dialer.Dial(u.String(), headers)
 	if err != nil {
 		return fmt.Errorf("连接WebSocket失败: %v", err)

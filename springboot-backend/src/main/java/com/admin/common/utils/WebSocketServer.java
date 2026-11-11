@@ -10,6 +10,7 @@ import com.admin.service.ForwardService;
 import com.admin.service.UserService;
 import com.admin.entity.User;
 import com.alibaba.fastjson2.JSON;
+import com.alibaba.fastjson2.JSONArray;
 import com.alibaba.fastjson2.JSONObject;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
@@ -468,6 +469,23 @@ public class WebSocketServer extends TextWebSocketHandler {
         return session != null && session.isOpen() && Objects.equals(session.getId(), sessionId);
     }
 
+    public static boolean supportsPausedServices(Long nodeId) {
+        WebSocketSession session = nodeSessions.get(nodeId);
+        return session != null && session.isOpen()
+                && Boolean.TRUE.equals(session.getAttributes().get("supportsPausedServices"));
+    }
+
+    private static boolean containsPausedService(Object msg, String type) {
+        if (!("AddService".equals(type) || "UpdateService".equals(type)) || !(msg instanceof JSONArray)) {
+            return false;
+        }
+        for (Object item : (JSONArray) msg) {
+            JSONObject metadata = ((JSONObject) item).getJSONObject("metadata");
+            if (metadata != null && metadata.getBooleanValue("paused")) return true;
+        }
+        return false;
+    }
+
     public static GostDto send_msg(Long node_id, Object msg, String type) {
         return send_msg(node_id, null, msg, type);
     }
@@ -495,6 +513,15 @@ public class WebSocketServer extends TextWebSocketHandler {
             sessionLocks.remove(nodeSession.getId());
             GostDto result = new GostDto();
             result.setMsg("节点连接已断开");
+            return result;
+        }
+
+        // Legacy parsers ignore paused metadata and bind listeners. Check the captured
+        // session here as well as at edit preflight, since a node can reconnect meanwhile.
+        if (containsPausedService(msg, type)
+                && !Boolean.TRUE.equals(nodeSession.getAttributes().get("supportsPausedServices"))) {
+            GostDto result = new GostDto();
+            result.setMsg("Node does not support safe paused configuration; upgrade the node first");
             return result;
         }
 

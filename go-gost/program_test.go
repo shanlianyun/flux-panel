@@ -18,6 +18,7 @@ import (
 
 func TestPanelConnectionStartsOnlyAfterRuntimeConfigIsLoaded(t *testing.T) {
 	ready := make(chan bool, 1)
+	capability := make(chan string, 1)
 	upgrader := websocket.Upgrader{}
 	panel := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, err := upgrader.Upgrade(w, r, nil)
@@ -26,6 +27,7 @@ func TestPanelConnectionStartsOnlyAfterRuntimeConfigIsLoaded(t *testing.T) {
 		}
 		defer conn.Close()
 		cfg := config.Global()
+		capability <- r.Header.Get("X-Node-Capabilities")
 		ready <- len(cfg.Limiters) == 1 && cfg.Limiters[0].Name == "boot-ready" &&
 			registry.TrafficLimiterRegistry().IsRegistered("boot-ready")
 		for {
@@ -46,6 +48,9 @@ func TestPanelConnectionStartsOnlyAfterRuntimeConfigIsLoaded(t *testing.T) {
 	defer p.Stop()
 	select {
 	case loaded := <-ready:
+		if got := <-capability; got != "paused-services-v1" {
+			t.Fatalf("node did not advertise safe pause support: %q", got)
+		}
 		if !loaded {
 			t.Fatal("panel can send commands before local config and registries are ready")
 		}

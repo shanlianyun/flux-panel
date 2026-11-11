@@ -65,15 +65,17 @@ bash panel_install.sh
 
 创建节点后，从面板“节点管理”复制安装命令，在节点服务器执行。命令使用临时文件下载并校验脚本，不会把节点密钥写入项目文件，也不会自动删除当前目录中的其他文件。
 
-已有节点不要重复执行安装命令覆盖配置。下载脚本后直接运行：
+已有原作者节点可以保留配置滚动升级，不要重复执行安装命令。先确认包含旧节点兼容修复的面板镜像和目标节点 Release 都已发布，再下载**本 fork** 的脚本打开菜单（旧脚本仍然下载原作者程序）：
 
 ```bash
-./install.sh
+curl --fail --location --retry 3 https://raw.githubusercontent.com/shanlianyun/flux-panel/main/install.sh -o flux-node.sh && bash flux-node.sh
 ```
 
-选择菜单 `2` 更新。更新只替换通过 SHA-256 和版本检查的 GOST 二进制，保留 `/etc/gost/config.json`、`/etc/gost/gost.json`，并短暂重启 `gost` 服务；新二进制启动失败时会恢复旧二进制。建议先灰度一台节点，确认转发和节点心跳正常后，再逐台滚动更新。公网面板先配置 TLS 反向代理；自动化更新时才使用 `GOST_PANEL_SCHEME=https ./install.sh update`。
+选择菜单 `2` 更新。更新只替换通过 SHA-256 和版本检查的 GOST 二进制，保留 `/etc/gost/config.json`、`/etc/gost/gost.json`，并短暂重启 `gost` 服务；新二进制启动失败时会恢复旧二进制。建议先灰度一台节点，确认转发和节点心跳正常后，再逐台滚动更新。公网面板先配置 TLS 反向代理，再运行 `GOST_PANEL_SCHEME=https bash flux-node.sh` 打开同一个菜单选 `2`。
 
 面板维护期间，节点本地已运行的转发规则不会因为控制通道断开而停止；新增、编辑、暂停和删除操作需等面板恢复。节点会自动重连并重新同步有效规则。
+
+旧节点仍可使用原有 HTTP/WS 通道；在全部节点完成迁移前，不要直接关闭它或强制仅允许 HTTPS/WSS。旧节点不能获得新版的暂停持久化和安全加固；当存在暂停规则时，面板会拒绝不安全的限速配置修改并提示升级，而不是偷偷启动监听。详见[常见问题](./faq#原作者旧节点能否继续使用)。
 
 节点检查命令：
 

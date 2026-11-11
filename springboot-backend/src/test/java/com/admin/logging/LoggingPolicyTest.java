@@ -16,6 +16,7 @@ import org.springframework.boot.env.YamlPropertySourceLoader;
 import org.springframework.core.env.SystemEnvironmentPropertySource;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.mock.env.MockEnvironment;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -25,6 +26,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Random;
 import java.util.stream.Collectors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.zip.GZIPInputStream;
 import java.util.zip.GZIPOutputStream;
 
@@ -87,6 +90,11 @@ class LoggingPolicyTest {
     @Test
     void dateChangeRotatesEvenWhenActiveFileIsSmall() throws Exception {
         configure(new MockEnvironment());
+        // Finish startup cleanup before jumping the synthetic clock; Logback's
+        // cleanup and rollover otherwise race over their shared calendar.
+        Future<?> startupCleanup = (Future<?>) ReflectionTestUtils.getField(policy(), "cleanUpFuture");
+        assertNotNull(startupCleanup);
+        startupCleanup.get(5, TimeUnit.SECONDS);
         Logger logger = context.getLogger("retention-test");
         logger.info("before-date-change");
         TimeBasedFileNamingAndTriggeringPolicyBase<?> clock = (TimeBasedFileNamingAndTriggeringPolicyBase<?>)
@@ -94,7 +102,7 @@ class LoggingPolicyTest {
         clock.setCurrentTime(System.currentTimeMillis() + 24 * 60 * 60 * 1000L);
         logger.info("after-date-change");
         context.stop();
-        assertEquals(1, archives().size());
+        assertEquals(1, archives().size(), () -> context.getStatusManager().getCopyOfStatusList().toString());
         assertTrue(Files.readString(directory.resolve("backend.log")).contains("after-date-change"));
         try (GZIPInputStream input = new GZIPInputStream(Files.newInputStream(archives().get(0)))) {
             assertTrue(new String(input.readAllBytes()).contains("before-date-change"));

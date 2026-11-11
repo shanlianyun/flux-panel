@@ -366,6 +366,7 @@ func TestPanelOutageLeavesHealthyForwardRunning(t *testing.T) {
 	var outage atomic.Bool
 	var connectedOnce sync.Once
 	connected := make(chan struct{})
+	control := make(chan *websocket.Conn, 1)
 	upgrader := websocket.Upgrader{}
 	panel := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if outage.Load() {
@@ -376,7 +377,10 @@ func TestPanelOutageLeavesHealthyForwardRunning(t *testing.T) {
 		if err != nil {
 			return
 		}
-		connectedOnce.Do(func() { close(connected) })
+		connectedOnce.Do(func() {
+			control <- conn
+			close(connected)
+		})
 		defer conn.Close()
 		for {
 			if _, _, err := conn.ReadMessage(); err != nil {
@@ -397,13 +401,8 @@ func TestPanelOutageLeavesHealthyForwardRunning(t *testing.T) {
 		t.Fatal("reporter did not connect to panel")
 	}
 
-	assertEcho := func() {
+	assertEcho := func(conn net.Conn) {
 		t.Helper()
-		conn, err := net.DialTimeout("tcp", cfg.Addr, time.Second)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer conn.Close()
 		_ = conn.SetDeadline(time.Now().Add(time.Second))
 		if _, err := conn.Write([]byte("ping")); err != nil {
 			t.Fatal(err)
@@ -417,11 +416,34 @@ func TestPanelOutageLeavesHealthyForwardRunning(t *testing.T) {
 		}
 	}
 
-	assertEcho()
+	stream, err := net.DialTimeout("tcp", cfg.Addr, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stream.Close()
+	assertEcho(stream)
 	outage.Store(true)
-	// Closing the control connection represents panel maintenance. The local
-	// forwarding listener must stay available while the reporter retries.
-	panel.CloseClientConnections()
-	time.Sleep(100 * time.Millisecond)
-	assertEcho()
+	// HTTP test-server cleanup does not close hijacked WebSockets. Close the
+	// actual control socket and wait until the reporter observes the outage.
+	(<-control).Close()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		reporter.connMutex.Lock()
+		connected := reporter.connected
+		reporter.connMutex.Unlock()
+		if !connected {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("reporter did not observe panel outage")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	assertEcho(stream)
+	newStream, err := net.DialTimeout("tcp", cfg.Addr, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer newStream.Close()
+	assertEcho(newStream)
 }
