@@ -94,6 +94,17 @@ curl --fail --location --retry 3 https://raw.githubusercontent.com/shanlianyun/f
 - **全新安装：选 `1`**，使用专用空目录；发现旧容器、数据卷或同名 Compose 项目就停止。
 - `4` 导出数据库/配置备份；`8` 恢复中断的迁移/更新。脚本不会再自动删除自己，之后可直接运行 `bash panel_install.sh`。
 
+管理脚本也支持非交互子命令，适合维护窗口：
+
+```bash
+bash panel_install.sh install --directory /root/flux-panel
+bash panel_install.sh migrate --directory /root/flux-panel
+bash panel_install.sh update --directory /root/flux-panel
+bash panel_install.sh backup --directory /root/flux-panel
+bash panel_install.sh recover --directory /root/flux-panel
+bash panel_install.sh help
+```
+
 脚本检查数据库结构和剩余空间，先备份、拉取完整 `sha-提交号` 镜像，再只替换前后端；保留旧端口、网络、数据卷及其他服务，不重启 Docker、MySQL 或节点，不自动执行改表 SQL。目标镜像尚未发布、备份失败或部署不兼容时会停止。**这不是任意旧版本的通用升级器**；建议先在备份副本验证，正式切换需要短暂维护窗口。
 
 失败时会尝试回退原容器和配置，**绝不自动回灌数据库**。基础健康检查不代替登录、WebSocket、隧道和流量验证。完整支持范围、备份说明及高级手动方式见[迁移指南](docs/migrate-from-original.md)。
@@ -108,9 +119,13 @@ PANEL_IMAGE_TAG=sha-替换为40位完整提交号 bash panel_install.sh
 
 节点端：
 ```bash
-curl -L https://raw.githubusercontent.com/shanlianyun/flux-panel/refs/heads/main/install.sh -o install.sh && chmod +x install.sh && ./install.sh
+./install.sh install -a '<面板地址:6365>' -s '<节点密钥>'
+# 已有节点更新：
+./install.sh update
 
 ```
+
+面板“节点管理”页面会生成包含安全下载和临时文件清理的完整安装命令；不建议手工使用 `curl | bash`。`update` 只替换已校验的 GOST 二进制，不覆盖节点配置，完成后会短暂重启服务。旧版数字菜单仍兼容，脚本不再自动删除自身。
 
 节点上报和控制通道默认保留 HTTP/WS 兼容旧部署；公网部署必须先配置面板 TLS 反向代理，再使用 `GOST_PANEL_SCHEME=https ./install.sh` 安装或更新节点，使节点使用 HTTPS/WSS。该变量会写入生成的 systemd 服务环境中。
 

@@ -132,3 +132,17 @@ fork 的 [`gost-latest` Release](https://github.com/shanlianyun/flux-panel/relea
 ### 面板维护时的节点可用性
 
 节点上的 GOST 转发服务由节点本地进程独立监听和转发。面板停机维护只会暂时中断控制通道和状态上报，不会停止已经运行的转发规则；节点会每 5 秒重试连接，面板恢复后自动重连并同步数据库中的有效规则。维护期间请不要依赖面板执行规则变更，恢复后再检查节点在线状态和转发连通性。
+
+### 节点脚本与滚动更新
+
+节点安装命令应从面板“节点管理”页面复制。脚本现在支持以下明确命令：
+
+```bash
+./install.sh install -a '<面板地址:6365>' -s '<节点密钥>'
+./install.sh update
+./install.sh uninstall
+./install.sh block-protocol
+./install.sh help
+```
+
+已有旧节点请使用 `update`，不要重新执行 `install`；更新会保留 `/etc/gost/config.json` 和 `/etc/gost/gost.json`，只在下载文件通过 SHA-256 与版本检查后替换二进制。更新期间 GOST 会短暂重启，因此应先灰度一台节点，再按批次滚动更新，并在每台节点执行 `systemctl is-active gost`、`gost -V` 和实际转发检查。公网面板请在 TLS 反向代理就绪后设置 `GOST_PANEL_SCHEME=https`。

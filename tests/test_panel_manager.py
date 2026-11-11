@@ -434,6 +434,15 @@ class ManagerTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(script.is_file(), "the management entry point must remain available")
 
+    def test_noninteractive_help_is_available(self):
+        script = self.deploy / "panel_install.sh"
+        shutil.copyfile(ROOT / "panel_install.sh", script)
+        result = subprocess.run(["bash", str(script), "help"], text=True,
+                                capture_output=True, env=self.env, cwd=self.deploy, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("panel_install.sh update", result.stdout)
+        self.assertTrue(script.is_file())
+
     def test_menu_failed_bootstrap_never_executes_partial_download(self):
         self.options["download_fail"] = True
         (self.root / "options.json").write_text(json.dumps(self.options))

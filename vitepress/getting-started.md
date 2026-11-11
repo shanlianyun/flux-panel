@@ -53,6 +53,40 @@ chmod 600 /原部署目录/.env
 
 失败时会尝试回退容器与配置，不会自动覆盖数据库。基础健康检查不能替代登录、WebSocket、节点心跳、隧道及流量验证。备份包含敏感数据库信息，应另存到服务器外。完整支持范围和恢复说明见[原作者版本迁移指南](https://github.com/shanlianyun/flux-panel/blob/main/docs/migrate-from-original.md)。
 
+管理脚本也支持非交互命令：
+
+```bash
+bash panel_install.sh update --directory /root/flux-panel
+bash panel_install.sh backup --directory /root/flux-panel
+bash panel_install.sh recover --directory /root/flux-panel
+bash panel_install.sh help
+```
+
+维护脚本会保留自身；更新或迁移中断时，先使用 `recover` 恢复容器和配置，再处理业务验证。
+
+## 节点安装与滚动更新
+
+创建节点后，从面板“节点管理”复制安装命令，在节点服务器执行。命令使用临时文件下载并校验脚本，不会把节点密钥写入项目文件，也不会自动删除当前目录中的其他文件。
+
+已有节点不要重复执行安装命令覆盖配置，使用：
+
+```bash
+./install.sh update
+```
+
+更新只替换通过 SHA-256 和版本检查的 GOST 二进制，保留 `/etc/gost/config.json`、`/etc/gost/gost.json`，并短暂重启 `gost` 服务。建议先灰度一台节点，确认转发和节点心跳正常后，再逐台滚动更新。公网面板先配置 TLS 反向代理，然后使用 `GOST_PANEL_SCHEME=https ./install.sh update`。
+
+面板维护期间，节点本地已运行的转发规则不会因为控制通道断开而停止；新增、编辑、暂停和删除操作需等面板恢复。节点会自动重连并重新同步有效规则。
+
+节点检查命令：
+
+```bash
+/etc/gost/gost -V
+systemctl is-active gost
+systemctl status gost --no-pager
+journalctl -u gost -n 50 --no-pager
+```
+
 ## 高级：手动使用 fork 镜像部署
 
 若需要自定义 Compose 部署，可以手动使用 fork 的 GHCR 镜像和专用 Compose 文件。部署前确认 GitHub Actions 最近一次 `Validate and publish fork images` 的验证、前后端镜像发布均成功，并将 `IMAGE_TAG` 设置为对应完整提交号的 `sha-<40位提交号>` 标签。当前镜像可匿名拉取。
