@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 var httpReportURL string
 var configReportURL string
 var httpAESCrypto *crypto.AESCrypto // 新增：HTTP上报加密器
+var httpReportSecret string
 
 // TrafficReportItem 流量报告项（压缩格式）
 type TrafficReportItem struct {
@@ -27,8 +29,13 @@ type TrafficReportItem struct {
 }
 
 func SetHTTPReportURL(addr string, secret string) {
-	httpReportURL = "http://" + addr + "/flow/upload?secret=" + secret
-	configReportURL = "http://" + addr + "/flow/config?secret=" + secret
+	scheme := os.Getenv("GOST_PANEL_SCHEME")
+	if scheme != "https" {
+		scheme = "http"
+	}
+	httpReportURL = scheme + "://" + addr + "/flow/upload"
+	configReportURL = scheme + "://" + addr + "/flow/config"
+	httpReportSecret = secret
 
 	// 创建 AES 加密器
 	var err error
@@ -80,6 +87,7 @@ func sendTrafficReport(ctx context.Context, reportItems TrafficReportItem) (bool
 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "GOST-Traffic-Reporter/1.0")
+	req.Header.Set("X-Node-Secret", httpReportSecret)
 
 	client := &http.Client{
 		Timeout: 5 * time.Second,
@@ -156,6 +164,7 @@ func sendConfigReport(ctx context.Context) (bool, error) {
 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "Config-Reporter/1.0")
+	req.Header.Set("X-Node-Secret", httpReportSecret)
 
 	client := &http.Client{
 		Timeout: 10 * time.Second, // 配置上报可以稍长一些

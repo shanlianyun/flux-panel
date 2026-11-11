@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"net/http"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	coreauth "github.com/go-gost/core/auth"
 	"github.com/go-gost/x/config"
 	"github.com/go-gost/x/config/loader"
 	_ "github.com/go-gost/x/connector/direct"
@@ -20,6 +22,12 @@ import (
 	_ "github.com/go-gost/x/listener/tcp"
 	"github.com/go-gost/x/registry"
 )
+
+type testAuthenticator struct{}
+
+func (testAuthenticator) Authenticate(context.Context, string, string, ...coreauth.Option) (string, bool) {
+	return "test", true
+}
 
 func pausedAPIFixture(t *testing.T) (*gin.Engine, *config.ServiceConfig) {
 	t.Helper()
@@ -49,7 +57,7 @@ func pausedAPIFixture(t *testing.T) (*gin.Engine, *config.ServiceConfig) {
 	}
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
-	Register(router, nil)
+	Register(router, &Options{Auther: testAuthenticator{}})
 	return router, cfg
 }
 

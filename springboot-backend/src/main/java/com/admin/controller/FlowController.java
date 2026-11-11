@@ -9,8 +9,8 @@ import com.admin.common.utils.AESCrypto;
 import com.admin.common.utils.GostUtil;
 import com.admin.common.utils.ForwardRuleLock;
 import com.admin.entity.*;
-import com.alibaba.fastjson.JSON;
-import com.alibaba.fastjson.JSONObject;
+import com.alibaba.fastjson2.JSON;
+import com.alibaba.fastjson2.JSONObject;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import org.springframework.web.bind.annotation.*;
@@ -18,6 +18,7 @@ import lombok.extern.slf4j.Slf4j;
 
 import javax.annotation.Resource;
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.util.Date;
 import java.util.List;
 import java.util.Objects;
@@ -102,7 +103,9 @@ public class FlowController extends BaseController {
 
     @PostMapping("/config")
     @LogAnnotation(debug = true)
-    public String config(@RequestBody String rawData, String secret) {
+    public String config(@RequestBody String rawData, @RequestParam(value = "secret", required = false) String secret,
+                         @RequestHeader(value = "X-Node-Secret", required = false) String headerSecret) {
+        if (headerSecret != null && !headerSecret.isBlank()) secret = headerSecret;
         Node node = nodeService.getOne(new QueryWrapper<Node>().eq("secret", secret));
         if (node == null) return SUCCESS_RESPONSE;
 
@@ -123,6 +126,12 @@ public class FlowController extends BaseController {
         return SUCCESS_RESPONSE;
     }
 
+    /** Compatibility overload for internal callers and existing node tests. */
+    @LogAnnotation(debug = true)
+    public String config(String rawData, String secret) {
+        return config(rawData, secret, null);
+    }
+
     @RequestMapping("/test")
     @LogAnnotation(debug = true)
     public String test() {
@@ -138,9 +147,13 @@ public class FlowController extends BaseController {
      */
     @RequestMapping("/upload")
     @LogAnnotation(debug = true)
-    public String uploadFlowData(@RequestBody String rawData, String secret) {
+    public String uploadFlowData(@RequestBody String rawData, @RequestParam(value = "secret", required = false) String secret,
+                                 @RequestHeader(value = "X-Node-Secret", required = false) String headerSecret) {
+        if (headerSecret != null && !headerSecret.isBlank()) secret = headerSecret;
         // 1. 验证节点权限
-        if (!isValidNode(secret)) {
+        if (secret == null || secret.isBlank()) return SUCCESS_RESPONSE;
+        Node node = nodeService.getOne(new QueryWrapper<Node>().eq("secret", secret));
+        if (node == null) {
             return SUCCESS_RESPONSE;
         }
 
@@ -149,14 +162,20 @@ public class FlowController extends BaseController {
 
         // 3. 解析为FlowDto列表
         FlowDto flowDataList = JSONObject.parseObject(decryptedData, FlowDto.class);
-        if (Objects.equals(flowDataList.getN(), "web_api")) {
+        if (flowDataList == null || Objects.equals(flowDataList.getN(), "web_api")) {
             return SUCCESS_RESPONSE;
         }
 
         // 记录日志
         log.debug("收到节点流量上报");
         // 4. 处理流量数据
-        return processFlowData(flowDataList);
+        return processFlowData(flowDataList, node);
+    }
+
+    /** Compatibility overload for internal callers and existing node tests. */
+    @LogAnnotation(debug = true)
+    public String uploadFlowData(String rawData, String secret) {
+        return uploadFlowData(rawData, secret, null);
     }
 
     /**
@@ -213,19 +232,44 @@ public class FlowController extends BaseController {
     /**
      * 处理流量数据的核心逻辑
      */
-    private String processFlowData(FlowDto flowDataList) {
+    private String processFlowData(FlowDto flowDataList, Node node) {
+        if (flowDataList.getN() == null || !flowDataList.getN().matches(
+                "[1-9][0-9]{0,18}_[1-9][0-9]{0,18}_(0|[1-9][0-9]{0,18})_(tcp|udp)")) {
+            return SUCCESS_RESPONSE;
+        }
+        if (flowDataList.getD() == null || flowDataList.getU() == null
+                || flowDataList.getD() < 0 || flowDataList.getU() < 0) return SUCCESS_RESPONSE;
         String[] serviceIds = parseServiceName(flowDataList.getN());
         String forwardId = serviceIds[0];
         String userId = serviceIds[1];
         String userTunnelId = serviceIds[2];
 
         Forward forward = forwardService.getById(forwardId);
+        if (forward == null || !Objects.equals(userId, String.valueOf(forward.getUserId()))) return SUCCESS_RESPONSE;
+        Tunnel tunnel = tunnelService.getById(forward.getTunnelId());
+        // Only ingress TCP/UDP services account traffic; exit TLS services must not double bill.
+        if (tunnel == null || node.getId() == null || !Objects.equals(node.getId(), tunnel.getInNodeId())) return SUCCESS_RESPONSE;
+        User user = userService.getById(userId);
+        if (user == null) return SUCCESS_RESPONSE;
+        if (DEFAULT_USER_TUNNEL_ID.equals(userTunnelId)) {
+            if (!Objects.equals(user.getRoleId(), 0)) return SUCCESS_RESPONSE;
+        } else {
+            UserTunnel grant = userTunnelService.getById(userTunnelId);
+            if (grant == null || !Objects.equals(grant.getUserId(), forward.getUserId())
+                    || !Objects.equals(grant.getTunnelId(), forward.getTunnelId())) return SUCCESS_RESPONSE;
+        }
 
         // 获取流量计费类型
-        int flowType = getFlowType(forward);
+        int flowType = tunnel.getFlow();
+        if (flowType != 1 && flowType != 2) return SUCCESS_RESPONSE;
 
         //  处理流量倍率及单双向计算
-        FlowDto flowStats = filterFlowData(flowDataList, forward, flowType);
+        FlowDto flowStats;
+        try {
+            flowStats = filterFlowData(flowDataList, forward, flowType);
+        } catch (ArithmeticException | IllegalArgumentException e) {
+            return SUCCESS_RESPONSE;
+        }
 
         // 先更新所有流量统计 - 确保流量数据的一致性
         updateForwardFlow(forwardId, flowStats);
@@ -324,6 +368,7 @@ public class FlowController extends BaseController {
             Tunnel tunnel = tunnelService.getById(forward.getTunnelId());
             if (tunnel != null) {
                 BigDecimal trafficRatio = tunnel.getTrafficRatio();
+                if (trafficRatio == null || trafficRatio.signum() < 0) throw new IllegalArgumentException("Invalid traffic ratio");
 
                 BigDecimal originalD = BigDecimal.valueOf(flowDto.getD());
                 BigDecimal originalU = BigDecimal.valueOf(flowDto.getU());
@@ -331,8 +376,8 @@ public class FlowController extends BaseController {
                 BigDecimal newD = originalD.multiply(trafficRatio);
                 BigDecimal newU = originalU.multiply(trafficRatio);
 
-                flowDto.setD(newD.longValue() * flowType);
-                flowDto.setU(newU.longValue() * flowType);
+                flowDto.setD(Math.multiplyExact(newD.setScale(0, RoundingMode.DOWN).longValueExact(), flowType));
+                flowDto.setU(Math.multiplyExact(newU.setScale(0, RoundingMode.DOWN).longValueExact(), flowType));
             }
         }
         return flowDto;
@@ -396,11 +441,6 @@ public class FlowController extends BaseController {
 
     private Object getForwardLock(String forwardId) {
         return FORWARD_LOCKS.computeIfAbsent(forwardId, k -> new Object());
-    }
-
-    private boolean isValidNode(String secret) {
-        int nodeCount = nodeService.count(new QueryWrapper<Node>().eq("secret", secret));
-        return nodeCount > 0;
     }
 
     private String[] parseServiceName(String serviceName) {

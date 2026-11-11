@@ -3,7 +3,11 @@ package socket
 import (
 	"io"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -17,6 +21,7 @@ import (
 	_ "github.com/go-gost/x/handler/forward/local"
 	_ "github.com/go-gost/x/listener/tcp"
 	"github.com/go-gost/x/registry"
+	"github.com/gorilla/websocket"
 )
 
 func recoveryFixture(t *testing.T, paused bool) config.ServiceConfig {
@@ -332,4 +337,91 @@ func TestReplayDoesNotReplaceHealthyServiceOrCloseConnection(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestPanelOutageLeavesHealthyForwardRunning(t *testing.T) {
+	cfg := recoveryFixture(t, false)
+	echo, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer echo.Close()
+	go func() {
+		for {
+			conn, err := echo.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer conn.Close()
+				_, _ = io.Copy(conn, conn)
+			}()
+		}
+	}()
+	cfg.Forwarder = &config.ForwarderConfig{Nodes: []*config.ForwardNodeConfig{{Name: "echo", Addr: echo.Addr().String()}}}
+	if err := createServices(createServicesRequest{Data: []config.ServiceConfig{cfg}}); err != nil {
+		t.Fatal(err)
+	}
+
+	var outage atomic.Bool
+	var connectedOnce sync.Once
+	connected := make(chan struct{})
+	upgrader := websocket.Upgrader{}
+	panel := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if outage.Load() {
+			http.Error(w, "panel maintenance", http.StatusServiceUnavailable)
+			return
+		}
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		connectedOnce.Do(func() { close(connected) })
+		defer conn.Close()
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
+		}
+	}))
+	defer panel.Close()
+
+	reporter := NewWebSocketReporter("ws"+strings.TrimPrefix(panel.URL, "http"), "panel-secret")
+	reporter.reconnectTime = 20 * time.Millisecond
+	reporter.pingInterval = 20 * time.Millisecond
+	reporter.Start()
+	defer reporter.Stop()
+	select {
+	case <-connected:
+	case <-time.After(time.Second):
+		t.Fatal("reporter did not connect to panel")
+	}
+
+	assertEcho := func() {
+		t.Helper()
+		conn, err := net.DialTimeout("tcp", cfg.Addr, time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer conn.Close()
+		_ = conn.SetDeadline(time.Now().Add(time.Second))
+		if _, err := conn.Write([]byte("ping")); err != nil {
+			t.Fatal(err)
+		}
+		var response [4]byte
+		if _, err := io.ReadFull(conn, response[:]); err != nil {
+			t.Fatal(err)
+		}
+		if string(response[:]) != "ping" {
+			t.Fatalf("unexpected forward response %q", response[:])
+		}
+	}
+
+	assertEcho()
+	outage.Store(true)
+	// Closing the control connection represents panel maintenance. The local
+	// forwarding listener must stay available while the reporter retries.
+	panel.CloseClientConnections()
+	time.Sleep(100 * time.Millisecond)
+	assertEcho()
 }

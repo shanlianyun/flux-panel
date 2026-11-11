@@ -3,6 +3,9 @@ package com.admin.common.aop;
 import com.admin.common.annotation.RequireRole;
 import com.admin.common.lang.R;
 import com.admin.common.utils.JwtUtil;
+import com.admin.entity.User;
+import com.admin.service.UserService;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.aspectj.lang.ProceedingJoinPoint;
 import org.aspectj.lang.annotation.Around;
 import org.aspectj.lang.annotation.Aspect;
@@ -21,6 +24,9 @@ import javax.servlet.http.HttpServletRequest;
 @Component
 public class RoleAspect {
 
+    @Autowired
+    private UserService userService;
+
     @Around("@annotation(requireRole)")
     public Object checkRole(ProceedingJoinPoint joinPoint, RequireRole requireRole) throws Throwable {
         // 获取当前请求
@@ -28,22 +34,24 @@ public class RoleAspect {
         if (attributes == null) {
             return R.err(500, "无法获取请求信息");
         }
-        
+
         HttpServletRequest request = attributes.getRequest();
         String token = request.getHeader("Authorization");
-        
+
         // JWT拦截器已经验证过token存在且有效，这里直接获取role_id
         Integer roleId = JwtUtil.getRoleIdFromToken(token);
         if (roleId == null) {
             return R.err(401, "无法获取用户权限信息");
         }
-        
+
         // 检查是否为管理员（role_id = 0）
-        if (roleId != 0) {
+        User user = userService == null ? null : userService.getById(JwtUtil.getUserIdFromToken(token));
+        if (roleId != 0 || !JwtUtil.validateTokenForUser(token, user)
+                || !Integer.valueOf(0).equals(user.getRoleId())) {
             return R.err(403, "权限不足，仅管理员可操作");
         }
-        
+
         // 权限检查通过，执行原方法
         return joinPoint.proceed();
     }
-} 
+}

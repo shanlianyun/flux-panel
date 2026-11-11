@@ -112,6 +112,10 @@ curl -L https://raw.githubusercontent.com/shanlianyun/flux-panel/refs/heads/main
 
 ```
 
+节点上报和控制通道默认保留 HTTP/WS 兼容旧部署；公网部署必须先配置面板 TLS 反向代理，再使用 `GOST_PANEL_SCHEME=https ./install.sh` 安装或更新节点，使节点使用 HTTPS/WSS。该变量会写入生成的 systemd 服务环境中。
+
+管理面板维护期间，节点上的 GOST 转发服务不会因为 WebSocket/HTTP 控制通道暂时断开而停止；节点会在面板恢复后自动重连并重新同步规则。维护窗口内不能通过面板执行新增、编辑、暂停或删除操作，节点本地已运行的规则仍继续提供服务。
+
 默认情况下安装脚本直接从 GitHub 下载，不会通过第三方代理，也不会向 IP 定位服务查询所在地。若你的网络必须经由可信镜像，可在运行前显式设置 `GITHUB_MIRROR_PREFIX`；请自行确认镜像服务的可信度。
 
 

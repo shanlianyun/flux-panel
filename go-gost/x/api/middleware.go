@@ -33,6 +33,9 @@ func mwLogger() gin.HandlerFunc {
 func mwBasicAuth(auther auth.Authenticator) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if auther == nil {
+			c.Writer.Header().Set("WWW-Authenticate", "Basic")
+			c.JSON(http.StatusUnauthorized, Response{Code: http.StatusUnauthorized, Msg: "management API authentication is not configured"})
+			c.Abort()
 			return
 		}
 		u, p, _ := c.Request.BasicAuth()

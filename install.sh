@@ -244,7 +244,14 @@ After=network.target
 [Service]
 WorkingDirectory=$INSTALL_DIR
 ExecStart=$INSTALL_DIR/gost
+Environment=GOST_PANEL_SCHEME=${GOST_PANEL_SCHEME:-http}
 Restart=on-failure
+# Defense in depth: service configuration is untrusted input and must not
+# grant the process additional host privileges.
+NoNewPrivileges=true
+PrivateTmp=true
+RestrictSUIDSGID=true
+LockPersonality=true
 
 [Install]
 WantedBy=multi-user.target
@@ -306,6 +313,15 @@ update_gost() {
 
   # 重启服务
   echo "🔄 重启服务..."
+  if [[ -f /etc/systemd/system/gost.service ]]; then
+    panel_scheme="${GOST_PANEL_SCHEME:-http}"
+    if grep -q '^Environment=GOST_PANEL_SCHEME=' /etc/systemd/system/gost.service; then
+      sed -i "s#^Environment=GOST_PANEL_SCHEME=.*#Environment=GOST_PANEL_SCHEME=$panel_scheme#" /etc/systemd/system/gost.service
+    else
+      sed -i "/^ExecStart=/a Environment=GOST_PANEL_SCHEME=$panel_scheme" /etc/systemd/system/gost.service
+    fi
+    systemctl daemon-reload || return $?
+  fi
   systemctl start gost || return $?
   if ! systemctl is-active --quiet gost; then
     echo "❌ gost服务启动失败，请执行以下命令查看日志："

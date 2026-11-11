@@ -11,6 +11,7 @@ import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
+import java.security.MessageDigest;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.Map;
@@ -20,14 +21,14 @@ import java.util.Map;
  */
 @Component
 public class JwtUtil {
-    
+
     @Value("${jwt-secret}")
     private String secretKey;
-    
+
     private static String SECRET_KEY;
-    
-    // token有效期，7天
-    private static final long EXPIRE_TIME = 90L * 24 * 60 * 60 * 1000;
+
+    // Short-lived access token; account changes are enforced on every request.
+    private static final long EXPIRE_TIME = 15L * 60 * 1000;
     // 算法
     private static final String ALGORITHM = "HmacSHA256";
 
@@ -43,6 +44,10 @@ public class JwtUtil {
      * @return 生成的JWT Token
      */
     public static String generateToken(User user) {
+        return generateToken(user, false);
+    }
+
+    public static String generateToken(User user, boolean requirePasswordChange) {
         try {
             long nowMillis = System.currentTimeMillis();
             Date now = new Date(nowMillis);
@@ -64,6 +69,8 @@ public class JwtUtil {
             payload.put("user", user.getUser());
             payload.put("name", user.getUser());
             payload.put("role_id", user.getRoleId());
+            payload.put("pwd_fp", passwordFingerprint(user.getPwd()));
+            payload.put("pwd_change_required", requirePasswordChange);
 
             String payloadJson = JSON.toJSONString(payload);
             String encodedPayload = Base64.getUrlEncoder().withoutPadding()
@@ -111,11 +118,30 @@ public class JwtUtil {
             Map<String, Object> payload = JSON.parseObject(decodedPayload, Map.class);
             long exp = Long.parseLong(payload.get("exp").toString());
             long now = System.currentTimeMillis() / 1000;
-            
+
             return exp > now;
         } catch (Exception e) {
             return false;
         }
+    }
+
+    /** Validate both the signed token and the current account snapshot. */
+    public static boolean validateTokenForUser(String token, User user) {
+        if (user == null || user.getStatus() == null || user.getStatus() != 1 || !validateToken(token)) {
+            return false;
+        }
+        try {
+            return user.getId().equals(getUserIdFromToken(token))
+                    && user.getRoleId().equals(getRoleIdFromToken(token))
+                    && passwordFingerprint(user.getPwd()).equals(getStringClaim(token, "pwd_fp"));
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    public static boolean requiresPasswordChange(String token) {
+        try { return Boolean.parseBoolean(getStringClaim(token, "pwd_change_required")); }
+        catch (Exception e) { return false; }
     }
 
     /**
@@ -165,6 +191,21 @@ public class JwtUtil {
         return Integer.parseInt(payload.get("role_id").toString());
     }
 
+    private static String getStringClaim(String token, String claim) {
+        String[] parts = token.split("\\.");
+        String decodedPayload = new String(Base64.getUrlDecoder().decode(parts[1]), StandardCharsets.UTF_8);
+        Map<String, Object> payload = JSON.parseObject(decodedPayload, Map.class);
+        Object value = payload.get(claim);
+        return value == null ? null : value.toString();
+    }
+
+    private static String passwordFingerprint(String passwordHash) throws Exception {
+        if (passwordHash == null) return "";
+        byte[] digest = MessageDigest.getInstance("SHA-256")
+                .digest(passwordHash.getBytes(StandardCharsets.UTF_8));
+        return Base64.getUrlEncoder().withoutPadding().encodeToString(digest);
+    }
+
     @SneakyThrows
     public static Integer getRoleIdFromToken() {
         String token = HttpContextUtils.getHttpServletRequest().getHeader("Authorization");
@@ -191,4 +232,4 @@ public class JwtUtil {
         byte[] signatureBytes = hmac.doFinal(content.getBytes(StandardCharsets.UTF_8));
         return Base64.getUrlEncoder().withoutPadding().encodeToString(signatureBytes);
     }
-} 
+}

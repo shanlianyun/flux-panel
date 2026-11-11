@@ -7,8 +7,10 @@ import com.admin.common.task.CheckGostConfigAsync;
 import com.admin.entity.Node;
 import com.admin.service.NodeService;
 import com.admin.service.ForwardService;
-import com.alibaba.fastjson.JSON;
-import com.alibaba.fastjson.JSONObject;
+import com.admin.service.UserService;
+import com.admin.entity.User;
+import com.alibaba.fastjson2.JSON;
+import com.alibaba.fastjson2.JSONObject;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
@@ -36,6 +38,9 @@ public class WebSocketServer extends TextWebSocketHandler {
     @Resource
     @Lazy
     private ForwardService forwardService;
+
+    @Resource
+    private UserService userService;
 
     // 存储所有活跃的 WebSocket 连接（
     private static final CopyOnWriteArraySet<WebSocketSession> activeSessions = new CopyOnWriteArraySet<>();
@@ -78,6 +83,12 @@ public class WebSocketServer extends TextWebSocketHandler {
                 String id = session.getAttributes().get("id").toString();
                 String type = session.getAttributes().get("type").toString();
                 String nodeSecret = (String) session.getAttributes().get("nodeSecret");
+
+                if (!Objects.equals(type, "1") && !isCurrentAdminSession(session, id)) {
+                    activeSessions.remove(session);
+                    session.close(CloseStatus.POLICY_VIOLATION);
+                    return;
+                }
 
                 // 尝试解密消息
                 String decryptedPayload = decryptMessageIfNeeded(message.getPayload(), nodeSecret);
@@ -133,15 +144,32 @@ public class WebSocketServer extends TextWebSocketHandler {
                     String broadcastMessage = jsonObject.toJSONString();
                     
                     // 异步处理广播消息，避免阻塞当前线程
-                    for (WebSocketSession targetSession : activeSessions) {
-                        if (targetSession != null && targetSession.isOpen() && !targetSession.equals(session)) {
-                            sendToUser(targetSession, broadcastMessage, null);
+                        for (WebSocketSession targetSession : activeSessions) {
+                            if (targetSession != null && targetSession.isOpen() && !targetSession.equals(session)) {
+                                Object targetId = targetSession.getAttributes().get("id");
+                                if (targetId == null || !isCurrentAdminSession(targetSession, targetId.toString())) {
+                                    activeSessions.remove(targetSession);
+                                    try { targetSession.close(CloseStatus.POLICY_VIOLATION); } catch (Exception ignored) { }
+                                    continue;
+                                }
+                                sendToUser(targetSession, broadcastMessage, null);
+                            }
                         }
-                    }
                 }
             }
         } catch (Exception e) {
             log.info("处理WebSocket消息时发生异常: {}", e.getMessage(), e);
+        }
+    }
+
+    private boolean isCurrentAdminSession(WebSocketSession session, String id) {
+        if (userService == null) return true; // test-only direct instances are not managed beans
+        try {
+            User user = userService.getById(Long.valueOf(id));
+            return JwtUtil.validateTokenForUser((String) session.getAttributes().get("token"), user)
+                    && Objects.equals(user.getRoleId(), 0);
+        } catch (Exception e) {
+            return false;
         }
     }
 
