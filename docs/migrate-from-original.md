@@ -127,7 +127,7 @@ fork 的 [`gost-latest` Release](https://github.com/shanlianyun/flux-panel/relea
 
 安装器默认直连 GitHub，不再根据 IP 地理定位自动将二进制和配置下载请求转交给第三方代理。如网络环境必须使用镜像，请显式设置 `GITHUB_MIRROR_PREFIX`，只使用你信任的服务。
 
-安全部署新节点时，先为面板配置有效 TLS 证书和 WebSocket 反向代理，在“网站配置 → 节点连接地址”保存 `https://节点入口域名:443`，再从节点记录复制完整安装命令；命令自动携带协议，无需另设环境变量。`GOST_PANEL_SCHEME=https bash flux-node.sh` 仅用于地址已对应 TLS 入口的已有节点切换协议，菜单选 `2` 更新，不要重装。旧 HTTP/WS 通道在旧节点逐台迁移验证前必须保留，但不能作为公网安全配置。
+安全部署新节点时，先为面板配置有效 TLS 证书和 WebSocket 反向代理，在“网站配置 → 节点连接地址”保存 `https://节点入口域名:443`，再从节点记录复制完整安装命令；命令自动携带协议，无需另设环境变量。已有节点先用本 fork 菜单 `2` 更新程序，再在最新版脚本选择 `6. 修改面板连接地址 / 迁移 HTTPS`，输入完整新入口并确认，不要卸载重装。脚本先验证证书和后端，再备份、切换并验证真实 WebSocket 连接，失败恢复原配置并尝试重启；重启可能中断当前连接。完整步骤及中断恢复见[旧节点升级说明](legacy-node-upgrade.md)。旧 HTTP/WS 通道在旧节点逐台迁移验证前必须保留，但不能作为公网安全配置。
 
 ### 面板维护时的节点可用性
 
@@ -141,4 +141,4 @@ fork 的 [`gost-latest` Release](https://github.com/shanlianyun/flux-panel/relea
 ./install.sh
 ```
 
-已有旧节点选择菜单 `2` 更新，不要选择 `1` 覆盖配置；更新会保留 `/etc/gost/config.json` 和 `/etc/gost/gost.json`，只在下载文件通过 SHA-256 与版本检查后替换二进制。若新二进制无法启动，脚本会恢复旧二进制。更新期间 GOST 会短暂重启，因此应先灰度一台节点，再按批次滚动更新，并在每台节点执行 `systemctl is-active gost`、`gost -V` 和实际转发检查。公网面板请在 TLS 反向代理就绪后设置 `GOST_PANEL_SCHEME=https`。
+已有旧节点选择菜单 `2` 更新，不要选择 `1` 覆盖配置；更新会保留 `/etc/gost/config.json` 和 `/etc/gost/gost.json`，只在下载文件通过 SHA-256 与版本检查后替换二进制。若新二进制无法启动，脚本会恢复旧二进制。更新期间 GOST 会短暂重启，因此应先灰度一台节点，再按批次滚动更新，并在每台节点执行 `systemctl is-active gost`、`gost -V` 和实际转发检查。更新本身不迁移连接地址/协议；公网 HTTPS/WSS 迁移请在反代就绪后选菜单 `6`。

@@ -68,6 +68,7 @@ show_menu() {
   echo "3. 卸载"
   echo "4. 屏蔽 http/tls/socks 协议"
   echo "5. 退出"
+  echo "6. 修改面板连接地址 / 迁移 HTTPS"
   echo "==============================================="
 }
 
@@ -120,15 +121,17 @@ normalize_panel_endpoint() {
   validate_panel_scheme
 }
 
-# Remove only the exact compatibility override previously documented by this fork.
+# Remove only exact scheme overrides owned/documented by this fork.
 remove_legacy_panel_override() {
-  local override="/etc/systemd/system/gost.service.d/99-panel-https.conf" content
-  [[ -f "$override" && ! -L "$override" ]] || return 0
-  content=$(cat "$override") || return 1
-  if [[ "$content" == $'[Service]\nEnvironment=GOST_PANEL_SCHEME=https' ||
-        "$content" == $'[Service]\nEnvironment=GOST_PANEL_SCHEME=http' ]]; then
-    rm -f -- "$override" || return 1
-  fi
+  local override content
+  for override in /etc/systemd/system/gost.service.d/{99-panel-https,99-flux-panel-endpoint}.conf; do
+    [[ -f "$override" && ! -L "$override" ]] || continue
+    content=$(cat "$override") || return 1
+    if [[ "$content" == $'[Service]\nEnvironment=GOST_PANEL_SCHEME=https' ||
+          "$content" == $'[Service]\nEnvironment=GOST_PANEL_SCHEME=http' ]]; then
+      rm -f -- "$override" || return 1
+    fi
+  done
 }
 
 # Observe this service invocation, never create a second authenticated node connection.
@@ -191,6 +194,8 @@ show_help() {
   uninstall  停止服务并删除 /etc/gost（需要确认，-y 可跳过确认）
   block-protocol  在入口节点屏蔽 http/tls/socks 协议
   安装命令中的 https:// 自动启用 HTTPS/WSS，无需另设环境变量
+  已有节点迁移地址或 HTTPS：打开数字菜单选 6，需要 Python 3、curl、systemd
+  迁移会备份并短暂重启，连接失败会恢复原配置；不要卸载旧节点
   旧的 host:port 参数和 GOST_PANEL_SCHEME 仅保留兼容已有维护流程
 
 直接运行 ./install.sh 会打开数字菜单；脚本不会自动删除自身。
@@ -315,6 +320,7 @@ update_gost() {
   mv -f "$new_binary" "$INSTALL_DIR/gost"
   echo "🔎 新版本：$($INSTALL_DIR/gost -V)"
   if [[ -n "${GOST_PANEL_SCHEME+x}" && -f /etc/systemd/system/gost.service ]]; then
+    remove_legacy_panel_override || return $?
     if grep -q '^Environment=GOST_PANEL_SCHEME=' /etc/systemd/system/gost.service; then
       sed -i "s#^Environment=GOST_PANEL_SCHEME=.*#Environment=GOST_PANEL_SCHEME=$GOST_PANEL_SCHEME#" /etc/systemd/system/gost.service
     else
@@ -375,6 +381,217 @@ PY
   echo "✅ 已屏蔽 http/tls/socks 协议并重启 gost。"
 }
 
+# Read only the relevant effective setting; never print the service's other secrets.
+panel_service_scheme() {
+  local environment
+  environment=$(systemctl show gost -p Environment --value) || return 1
+  python3 - "$environment" <<'PY'
+import shlex
+import sys
+scheme = "http"
+for value in shlex.split(sys.argv[1]):
+    if value.startswith("GOST_PANEL_SCHEME="):
+        scheme = value.split("=", 1)[1]
+if scheme not in ("http", "https"):
+    sys.exit(1)
+print(scheme)
+PY
+}
+
+# This explicit maintenance transaction is separate from ordinary offline startup.
+migrate_panel_endpoint() (
+  umask 077
+  local config="$INSTALL_DIR/config.json"
+  local dropdir="/etc/systemd/system/gost.service.d"
+  local override="$dropdir/99-flux-panel-endpoint.conf"
+  local lock="$INSTALL_DIR/.endpoint-migration.lock"
+  local backup="" config_new="" override_new="" changed=0 committed=0 restarted=0 made_dropdir=0
+  local endpoint parsed scheme address old_scheme old_address confirm envfiles response old_invocation
+
+  command -v python3 >/dev/null && command -v curl >/dev/null || {
+    echo "❌ 此操作需要 Python 3 和 curl；未修改节点。"; return 1;
+  }
+  [[ -d "$INSTALL_DIR" && ! -L "$INSTALL_DIR" && -f "$config" && ! -L "$config" ]] || {
+    echo "❌ 需要已安装节点的常规 config.json；未修改节点。"; return 1;
+  }
+  mkdir "$lock" 2>/dev/null || { echo "❌ 另一个迁移正在进行，或存在未处理的迁移锁：$lock"; return 1; }
+
+  finish_endpoint_migration() {
+    local status=$? restored=1
+    trap - EXIT INT TERM HUP
+    if [[ "$changed" == 1 && "$committed" == 0 ]]; then
+      # Restore via same-filesystem renames, including the original file's absence.
+      cp -p "$backup/config.json" "$config_new" && mv -f "$config_new" "$config" || restored=0
+      if [[ -f "$backup/endpoint.conf" ]]; then
+        cp -p "$backup/endpoint.conf" "$override_new" && mv -f "$override_new" "$override" || restored=0
+      else
+        rm -f -- "$override" || restored=0
+      fi
+      if [[ "$restored" == 1 ]] && systemctl daemon-reload; then
+        if [[ "$restarted" == 0 ]]; then
+          echo "ℹ️ 已恢复原配置，原服务未重启。"
+        elif systemctl restart gost && systemctl is-active --quiet gost; then
+          echo "ℹ️ 已恢复原配置并重启原服务；请验证原有转发。"
+        else
+          echo "❌ 原配置已恢复，但恢复服务失败；请检查 journalctl -u gost 和备份：$backup"
+        fi
+      else
+        echo "❌ 配置回退或 daemon-reload 失败；请使用备份人工恢复：$backup"
+      fi
+      status=1
+    fi
+    [[ -z "$config_new" ]] || rm -f -- "$config_new"
+    [[ -z "$override_new" ]] || rm -f -- "$override_new"
+    [[ "$made_dropdir" == 0 || "$committed" == 1 ]] || rmdir "$dropdir" 2>/dev/null
+    rmdir "$lock" 2>/dev/null
+    return "$status"
+  }
+  trap finish_endpoint_migration EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  trap 'exit 129' HUP
+
+  if [[ -L "$dropdir" || -L "$override" || ( -e "$override" && ! -f "$override" ) ]]; then
+    echo "❌ 连接设置路径不是常规文件/目录，拒绝覆盖。"; return 1
+  fi
+  if [[ -f "$override" ]]; then
+    local content
+    content=$(cat "$override") || return 1
+    if [[ "$content" != $'[Service]\nEnvironment=GOST_PANEL_SCHEME=https' &&
+          "$content" != $'[Service]\nEnvironment=GOST_PANEL_SCHEME=http' ]]; then
+      echo "❌ 连接设置文件含自定义内容，拒绝覆盖：$override"; return 1
+    fi
+  fi
+  envfiles=$(systemctl show gost -p EnvironmentFiles --value) || return 1
+  [[ -z "$envfiles" ]] || { echo "❌ 服务使用自定义 EnvironmentFile，请先人工核对协议覆盖；未修改节点。"; return 1; }
+  old_scheme=$(panel_service_scheme) || { echo "❌ 无法读取原服务协议。"; return 1; }
+  old_address=$(python3 - "$config" <<'PY'
+import json
+import sys
+try:
+    with open(sys.argv[1], encoding="utf-8") as handle:
+        config = json.load(handle)
+    addr = config["addr"]
+    if not isinstance(config.get("secret"), str) or not config["secret"]:
+        raise ValueError()
+    if not isinstance(addr, str) or not addr or any(c.isspace() for c in addr) or any(c in addr for c in "/@?#\\\""):
+        raise ValueError()
+    print(addr)
+except (ValueError, KeyError, TypeError, OSError):
+    sys.exit(1)
+PY
+  ) || { echo "❌ 原 config.json 缺少有效地址/密钥或不是有效 JSON；未修改节点。"; return 1; }
+
+  echo "当前入口：$old_scheme://$old_address"
+  read -r -p "新的完整入口（例如 https://node.example.com:443）: " endpoint || return 1
+  parsed=$(python3 - "$endpoint" <<'PY'
+import ipaddress
+import re
+import sys
+from urllib.parse import urlsplit
+try:
+    raw = sys.argv[1]
+    url = urlsplit(raw)
+    if (url.scheme not in ("http", "https") or not raw.startswith(url.scheme + "://")
+            or any(c.isspace() or ord(c) < 32 for c in raw)
+            or any(c in raw for c in "?#\\") or url.path or url.username is not None
+            or url.password is not None or not url.hostname or not url.port or not 1 <= url.port <= 65535):
+        raise ValueError()
+    host = url.hostname
+    if ":" in host:
+        ipaddress.IPv6Address(host)
+        if "%" in host:
+            raise ValueError()
+        host = "[" + host + "]"
+    elif not (len(host) <= 253 and all(re.fullmatch(r"[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?", label) for label in host.split("."))):
+        raise ValueError()
+    print(url.scheme)
+    print(host + ":" + str(url.port))
+except ValueError:
+    sys.exit(1)
+PY
+  ) || { echo "❌ 请输入明确的 http(s)://主机:端口，不含路径、认证、查询或片段；未修改节点。"; return 1; }
+  scheme=${parsed%%$'\n'*}
+  address=${parsed#*$'\n'}
+  endpoint="$scheme://$address"
+  echo "新入口：$endpoint"
+  echo "密钥、本地转发配置及二进制保持不变；将重启 gost，现有连接可能短暂中断。"
+  if [[ "$scheme" == http ]]; then
+    echo "⚠️ HTTP/WS 不加密，只适合受控网络。"
+    read -r -p "确认使用明文入口？输入 HTTP 继续: " confirm || return 1
+    [[ "$confirm" == HTTP ]] || { echo "已取消，未修改节点。"; return 0; }
+  else
+    read -r -p "确认迁移？(y/N): " confirm || return 1
+    [[ "$confirm" == y || "$confirm" == Y ]] || { echo "已取消，未修改节点。"; return 0; }
+  fi
+  echo "🔎 检查证书和后端入口（不跳过 TLS 校验）..."
+  response=$(curl --disable --fail --silent --show-error --proto '=http,https' --connect-timeout 8 --max-time 15 \
+    --write-out $'\n%{http_code}' "$endpoint/flow/test") || {
+    echo "❌ 新入口网络或证书检查失败；原服务未重启。"; return 1;
+  }
+  [[ "$response" == $'test\n200' ]] || { echo "❌ 新入口未返回预期后端响应；请检查反代，原服务未重启。"; return 1; }
+
+  backup=$(mktemp -d "$INSTALL_DIR/endpoint-backup.XXXXXX") || return 1
+  chmod 700 "$backup" || return 1
+  cp -p "$config" "$backup/config.json" || return 1
+  if [[ -f "$override" ]]; then cp -p "$override" "$backup/endpoint.conf" || return 1; fi
+  echo "备份目录：${backup}（含节点密钥，请勿公开）"
+  config_new=$(mktemp "$INSTALL_DIR/config.endpoint.XXXXXX") || return 1
+  cp -p "$backup/config.json" "$config_new" || return 1
+  python3 - "$backup/config.json" "$config_new" "$address" <<'PY'
+import json
+import os
+import sys
+source, target, address = sys.argv[1:]
+with open(source, encoding="utf-8") as handle:
+    config = json.load(handle)
+config["addr"] = address
+with open(target, "w", encoding="utf-8") as handle:
+    json.dump(config, handle, ensure_ascii=False)
+    handle.write("\n")
+    handle.flush()
+    os.fsync(handle.fileno())
+PY
+  [[ $? == 0 ]] || { echo "❌ 无法准备新配置；原服务未重启。"; return 1; }
+  if [[ ! -d "$dropdir" ]]; then mkdir "$dropdir" || return 1; made_dropdir=1; fi
+  override_new=$(mktemp "$dropdir/.endpoint.XXXXXX") || return 1
+  printf '[Service]\nEnvironment=GOST_PANEL_SCHEME=%s\n' "$scheme" > "$override_new" || return 1
+  old_invocation=$(systemctl show gost -p InvocationID --value) || return 1
+  changed=1
+  mv -f "$config_new" "$config" && mv -f "$override_new" "$override" || return 1
+  systemctl daemon-reload || return 1
+  [[ "$(panel_service_scheme)" == "$scheme" ]] || {
+    echo "❌ 自定义 systemd 设置覆盖了新协议；取消迁移。"; return 1;
+  }
+  restarted=1
+  systemctl restart gost || { echo "❌ 新配置启动失败，正在回退。"; return 1; }
+  local invocation event events attempt current websocket_scheme=ws
+  [[ "$scheme" != https ]] || websocket_scheme=wss
+  for attempt in {1..15}; do
+    systemctl is-active --quiet gost || { echo "❌ 新服务未保持运行，正在回退。"; return 1; }
+    invocation=$(systemctl show gost -p InvocationID --value) || return 1
+    if [[ "$invocation" =~ ^[[:xdigit:]]{32}$ && "$invocation" != "$old_invocation" ]]; then
+      events=$(journalctl "_SYSTEMD_INVOCATION_ID=$invocation" --no-pager -o cat 2>/dev/null |
+        grep -E 'WebSocket连接地址:|WebSocket连接建立成功|WebSocket连接失败|WebSocket读取消息错误|WebSocket连接已关闭')
+      event=$(printf '%s\n' "$events" | tail -n 1)
+      case "$event" in
+        *WebSocket连接建立成功*)
+          current=$(systemctl show gost -p InvocationID --value) || return 1
+          if [[ "$current" == "$invocation" ]] && systemctl is-active --quiet gost &&
+            printf '%s\n' "$events" | grep -Fq "WebSocket连接地址: $websocket_scheme://$address/system-info?type=1&version="; then
+            committed=1
+            echo "✅ 迁移完成，节点已通过新入口连接面板。请再验证节点在线、实际转发和流量上报。"
+            return 0
+          fi ;;
+        *WebSocket连接失败*) echo "❌ 新入口 WebSocket 握手失败，正在回退；请检查证书、反代与节点认证。"; return 1 ;;
+      esac
+    fi
+    [[ "$attempt" == 15 ]] || sleep 2
+  done
+  echo "❌ 未确认新服务连接面板，正在回退。"
+  return 1
+)
+
 # 卸载功能
 uninstall_gost() {
   echo "🗑️ 开始卸载 GOST..."
@@ -421,14 +638,15 @@ main() {
     menu)
       while true; do
         show_menu
-        read -r -p "请输入选项 (1-5): " choice
+        read -r -p "请输入选项 (1-6): " choice || return 1
         case "$choice" in
           1) install_gost; return $? ;;
           2) update_gost; return $? ;;
           3) uninstall_gost; return $? ;;
           4) block_protocol; return $? ;;
           5) echo "👋 退出脚本"; return 0 ;;
-          *) echo "❌ 无效选项，请输入 1-5" ;;
+          6) migrate_panel_endpoint; return $? ;;
+          *) echo "❌ 无效选项，请输入 1-6" ;;
         esac
       done
       ;;

@@ -12,14 +12,15 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class NodeInstallFlowTests(unittest.TestCase):
-    def run_install(self, endpoint, journal="connected", inherited="http", legacy_override=False):
+    def run_install(self, endpoint, journal="connected", inherited="http", legacy_override=False,
+                    override_name="99-panel-https.conf"):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             source = (ROOT / "install.sh").read_text().splitlines()
             self.assertTrue(source[-1].startswith("main "))
             source = "\n".join(source[:-1]) + "\n"
             source = source.replace("/etc/systemd/system", str(root / "systemd"))
-            override = root / "systemd/gost.service.d/99-panel-https.conf"
+            override = root / "systemd/gost.service.d" / override_name
             override.parent.mkdir(parents=True)
             if legacy_override:
                 override.write_text("[Service]\nEnvironment=GOST_PANEL_SCHEME=https\n")
@@ -95,6 +96,47 @@ main "$@"
         result, _, _, remains = self.run_install("http://panel.example.com:6365", legacy_override=True)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertFalse(remains)
+
+    def test_managed_migration_override_does_not_force_http_reinstall_to_https(self):
+        result, _, _, remains = self.run_install("http://panel.example.com:6365", legacy_override=True,
+                                                 override_name="99-flux-panel-endpoint.conf")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse(remains)
+
+    def test_update_preserves_migration_scheme_unless_explicitly_overridden(self):
+        for explicit in (None, "http"):
+            with self.subTest(explicit=explicit), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                node = root / "node"
+                node.mkdir()
+                (node / "gost").write_text("#!/bin/sh\nexit 0\n")
+                (node / "gost").chmod(0o755)
+                config = node / "config.json"
+                config.write_text('{"addr":"keep:443","secret":"keep"}\n')
+                dropins = root / "systemd/gost.service.d"
+                dropins.mkdir(parents=True)
+                override = dropins / "99-flux-panel-endpoint.conf"
+                override.write_text("[Service]\nEnvironment=GOST_PANEL_SCHEME=https\n")
+                service = root / "systemd/gost.service"
+                service.write_text("[Service]\nExecStart=/etc/gost/gost\nEnvironment=GOST_PANEL_SCHEME=http\n")
+                source = "\n".join((ROOT / "install.sh").read_text().splitlines()[:-1])
+                source = source.replace("/etc/systemd/system", str(root / "systemd"))
+                script = root / "install.sh"
+                script.write_text(source + r'''
+INSTALL_DIR="$FIXTURE/node"
+select_gost_asset() { :; }
+download_and_verify_gost() { cp -p "$INSTALL_DIR/gost" "$1"; }
+systemctl() { return 0; }
+main update
+''')
+                env = {**os.environ, "FIXTURE": directory}
+                env.pop("GOST_PANEL_SCHEME", None)
+                if explicit:
+                    env["GOST_PANEL_SCHEME"] = explicit
+                result = subprocess.run(["bash", str(script)], env=env, text=True, capture_output=True, timeout=5)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(override.exists(), explicit is None)
+                self.assertEqual(config.read_text(), '{"addr":"keep:443","secret":"keep"}\n')
 
     def test_menu_uninstall_removes_only_known_override_and_preserves_user_files(self):
         for content, symlink, removed in (

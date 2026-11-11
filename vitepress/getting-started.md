@@ -75,7 +75,9 @@ bash panel_install.sh
 curl --fail --location --retry 3 https://raw.githubusercontent.com/shanlianyun/flux-panel/main/install.sh -o flux-node.sh && bash flux-node.sh
 ```
 
-选择菜单 `2` 更新。更新只替换通过 SHA-256 和版本检查的 GOST 二进制，保留 `/etc/gost/config.json`、`/etc/gost/gost.json`，并短暂重启 `gost` 服务；新二进制启动失败时会恢复旧二进制。建议先灰度一台节点，确认转发和节点心跳正常后，再逐台滚动更新。公网面板先配置 TLS 反向代理，再运行 `GOST_PANEL_SCHEME=https bash flux-node.sh` 打开同一个菜单选 `2`。
+选择菜单 `2` 更新。更新只替换通过 SHA-256 和版本检查的 GOST 二进制，保留 `/etc/gost/config.json`、`/etc/gost/gost.json` 及原连接协议，并短暂重启 `gost` 服务；新二进制启动失败时会恢复旧二进制。建议先灰度一台节点，确认转发和节点心跳正常后，再逐台滚动更新。
+
+已有节点切换地址/HTTPS 时，先配置有效证书及 WebSocket 反代，再使用同一个新版菜单选 **`6. 修改面板连接地址 / 迁移 HTTPS`**，输入完整 `https://节点入口域名:443` 并确认。不用手改配置或重装；脚本先验证证书和后端，再备份、重启并验证真实连接，失败会恢复原配置并尝试重启。迁移需要 Python 3、curl、systemd，重启可能中断当前连接；操作步骤及恢复说明见[常见问题](./faq#旧节点迁移-https-wss-选择-6)。
 
 面板维护期间，节点本地已运行的转发规则不会因为控制通道断开而停止；新增、编辑、暂停和删除操作需等面板恢复。节点会自动重连并重新同步有效规则。
 
