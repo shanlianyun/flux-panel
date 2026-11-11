@@ -337,20 +337,16 @@ public class NodeServiceImpl extends ServiceImpl<NodeMapper, Node> implements No
         ViteConfig viteConfig = viteConfigService.getOne(new QueryWrapper<ViteConfig>().eq("name", "ip"));
         if (viteConfig == null) return R.err("请先前往网站配置中设置ip");
 
-        // 下载到临时文件，安装完成后清理；不要把脚本落在用户当前目录。
-        String installerUrl = "https://raw.githubusercontent.com/shanlianyun/flux-panel/refs/heads/main/install.sh";
+        // The bootstrap owns temporary downloads and cleanup; keep credentials as literal arguments.
+        String bootstrapUrl = "https://raw.githubusercontent.com/shanlianyun/flux-panel/main/node.sh";
         String processedServerAddr = processServerAddress(viteConfig.getValue());
-        String temporaryPath = "/tmp/flux-panel-install.XXXXXX";
-        StringBuilder command = new StringBuilder();
-        command.append("(tmp=$(mktemp ").append(shellQuote(temporaryPath)).append(")")
-               .append(" && curl --fail --location --retry 3 ")
-               .append(shellQuote(installerUrl)).append(" -o \"$tmp\"")
-               .append(" && chmod 700 \"$tmp\"")
-               .append(" && \"$tmp\" install -a ")
-               .append(shellQuote(processedServerAddr))
-               .append(" -s ").append(shellQuote(node.getSecret()))
-               .append("; status=$?; rm -f \"$tmp\"; exit $status)");
-        
+        String launcher = "(curl -fsSL " + bootstrapUrl
+                + " && printf '\\nmain \"$@\"\\n') | bash -s -- \"$@\"";
+        StringBuilder command = new StringBuilder("bash -o pipefail -c ");
+        command.append(shellQuote(launcher)).append(" -- ")
+               .append(shellQuote(processedServerAddr)).append(" ")
+               .append(shellQuote(node.getSecret()));
+
         return R.ok(command.toString());
     }
 

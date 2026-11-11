@@ -86,12 +86,15 @@ http://your-server-ip:6366
 
 ### 执行安装
 
-在目标服务器上执行复制的安装命令：
+以 root 身份在全新节点服务器上，粘贴面板复制的整条安装命令即可，不需要手填地址或密钥。不要使用其他旧节点的安装命令。
+
+命令调用本 fork 的 `node.sh` 引导脚本，将安装脚本下载到私有临时目录，下载失败、内容为空或语法检查失败时停止；结束后清理临时文件，节点程序仍会校验 SHA-256 和可执行版本。命令包含节点密钥，不要公开分享。
+
+公网节点须先配置可用的 HTTPS/WSS 面板入口，然后在同一个终端执行：
 
 ```bash
-# 示例：实际安装命令请从面板复制
-# 面板生成的命令会下载临时 install.sh，执行 install 子命令后自动清理
-curl --fail --location --retry 3 https://raw.githubusercontent.com/shanlianyun/flux-panel/main/install.sh -o /tmp/flux-panel-install.sh && chmod 700 /tmp/flux-panel-install.sh && /tmp/flux-panel-install.sh install -a 'your-panel-server:6365' -s 'your-node-secret'; rm -f /tmp/flux-panel-install.sh
+export GOST_PANEL_SCHEME=https
+# 接着粘贴面板复制的安装命令
 ```
 
 ::: warning 安装须知
