@@ -102,6 +102,63 @@ validate_panel_scheme() {
   esac
 }
 
+normalize_panel_endpoint() {
+  case "$SERVER_ADDR" in
+    https://*|http://*)
+      GOST_PANEL_SCHEME="${SERVER_ADDR%%://*}"
+      SERVER_ADDR="${SERVER_ADDR#*://}"
+      SERVER_ADDR="${SERVER_ADDR%/}"
+      export GOST_PANEL_SCHEME
+      ;;
+    *://*) echo "❌ 节点入口只支持 http:// 或 https://。"; return 1 ;;
+  esac
+  case "$SERVER_ADDR" in
+    ""|*/*|*\?*|*\#*|*@*|*[[:space:]]*)
+      echo "❌ 节点入口必须是主机和端口，不能包含路径、认证信息或查询参数。"
+      return 1 ;;
+  esac
+  validate_panel_scheme
+}
+
+# Remove only the exact compatibility override previously documented by this fork.
+remove_legacy_panel_override() {
+  local override="/etc/systemd/system/gost.service.d/99-panel-https.conf" content
+  [[ -f "$override" && ! -L "$override" ]] || return 0
+  content=$(cat "$override") || return 1
+  if [[ "$content" == $'[Service]\nEnvironment=GOST_PANEL_SCHEME=https' ||
+        "$content" == $'[Service]\nEnvironment=GOST_PANEL_SCHEME=http' ]]; then
+    rm -f -- "$override" || return 1
+  fi
+}
+
+# Observe this service invocation, never create a second authenticated node connection.
+report_panel_connection() {
+  local invocation event attempt
+  invocation=$(systemctl show gost -p InvocationID --value 2>/dev/null) || invocation=""
+  if [[ ! "$invocation" =~ ^[[:xdigit:]]{32}$ ]]; then
+    echo "⚠️ 服务已启动，但尚未确认面板连接；请在节点监控查看状态或检查 journalctl -u gost。"
+    return 0
+  fi
+  for attempt in {1..8}; do
+    if ! systemctl is-active --quiet gost; then
+      echo "❌ GOST 启动后退出，请查看 journalctl -u gost -n 50 --no-pager。"
+      return 1
+    fi
+    event=$(journalctl "_SYSTEMD_INVOCATION_ID=$invocation" -n 40 --no-pager -o cat 2>/dev/null |
+      grep -E 'WebSocket连接建立成功|WebSocket连接失败|WebSocket读取消息错误|WebSocket连接已关闭' | tail -n 1)
+    case "$event" in
+      *WebSocket连接建立成功*) echo "✅ 已连接面板，请在节点监控确认在线。"; return 0 ;;
+      *WebSocket连接失败*)
+        echo "⚠️ GOST 已启动，但尚未连接面板：$event"
+        echo "请检查节点入口协议、证书、WebSocket 反代和节点认证；服务保持运行，不停止本地转发。"
+        return 0 ;;
+    esac
+    [[ "$attempt" == 8 ]] || sleep 2
+  done
+  echo "⚠️ 服务已启动，但尚未确认面板连接；服务保持运行，请检查节点监控及 journalctl -u gost。"
+}
+
+
 # 解析显式子命令的选项。
 parse_options() {
   OPTIND=1
@@ -122,7 +179,7 @@ show_help() {
 推荐：直接运行 ./install.sh，按数字菜单选择操作。
 
 用法：
-  ./install.sh install -a <面板地址> -s <节点密钥>
+  ./install.sh install -a <http://或https://面板地址> -s <节点密钥>
   ./install.sh update
   ./install.sh uninstall [-y]
   ./install.sh block-protocol
@@ -133,7 +190,8 @@ show_help() {
   update     只更新已校验的 gost 二进制，不覆盖现有配置
   uninstall  停止服务并删除 /etc/gost（需要确认，-y 可跳过确认）
   block-protocol  在入口节点屏蔽 http/tls/socks 协议
-  GOST_PANEL_SCHEME=https 可用于 HTTPS/WSS 面板连接
+  安装命令中的 https:// 自动启用 HTTPS/WSS，无需另设环境变量
+  旧的 host:port 参数和 GOST_PANEL_SCHEME 仅保留兼容已有维护流程
 
 直接运行 ./install.sh 会打开数字菜单；脚本不会自动删除自身。
 HELP
@@ -143,6 +201,7 @@ HELP
 install_gost() {
   echo "🚀 开始安装 GOST..."
   get_config_params || return $?
+  normalize_panel_endpoint || return $?
   validate_config_value "$SERVER_ADDR" || return 1
   validate_config_value "$SECRET" || return 1
   validate_panel_scheme || return 1
@@ -201,13 +260,21 @@ LockPersonality=true
 WantedBy=multi-user.target
 SERVICE
 
+  remove_legacy_panel_override || return $?
   systemctl daemon-reload || return $?
+  local effective_scheme
+  effective_scheme=$(systemctl show gost -p Environment --value 2>/dev/null |
+    grep -oE 'GOST_PANEL_SCHEME=[^ ]+' | tail -n 1)
+  if [[ -n "$effective_scheme" && "$effective_scheme" != "GOST_PANEL_SCHEME=${GOST_PANEL_SCHEME:-http}" ]]; then
+    echo "❌ systemd 的其他配置覆盖了节点连接协议，请检查 gost.service.d；未启动新服务。"
+    return 1
+  fi
   systemctl enable gost || return $?
   systemctl start gost || return $?
   echo "🔄 检查服务状态..."
   if systemctl is-active --quiet gost; then
-    echo "✅ 安装完成，gost 服务已启动并设置为开机启动。"
-    echo "📁 配置目录: $INSTALL_DIR"
+    echo "✅ GOST 服务已启动并设置为开机启动；配置目录: $INSTALL_DIR"
+    report_panel_connection
   else
     echo "❌ gost 服务启动失败，请执行：journalctl -u gost -n 50 --no-pager"
     return 1
@@ -327,6 +394,7 @@ uninstall_gost() {
     systemctl disable gost 2>/dev/null
   fi
   rm -f "/etc/systemd/system/gost.service"
+  remove_legacy_panel_override || return $?
   rm -rf "$INSTALL_DIR"
   systemctl daemon-reload
   echo "✅ 卸载完成"

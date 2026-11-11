@@ -337,15 +337,17 @@ public class NodeServiceImpl extends ServiceImpl<NodeMapper, Node> implements No
         ViteConfig viteConfig = viteConfigService.getOne(new QueryWrapper<ViteConfig>().eq("name", "ip"));
         if (viteConfig == null) return R.err("请先前往网站配置中设置ip");
 
-        // The bootstrap owns temporary downloads and cleanup; keep credentials as literal arguments.
-        String bootstrapUrl = "https://raw.githubusercontent.com/shanlianyun/flux-panel/main/node.sh";
-        String processedServerAddr = processServerAddress(viteConfig.getValue());
-        String launcher = "(curl -fsSL " + bootstrapUrl
-                + " && printf '\\nmain \"$@\"\\n') | bash -s -- \"$@\"";
-        StringBuilder command = new StringBuilder("bash -o pipefail -c ");
-        command.append(shellQuote(launcher)).append(" -- ")
-               .append(shellQuote(processedServerAddr)).append(" ")
-               .append(shellQuote(node.getSecret()));
+        String endpoint;
+        try {
+            endpoint = normalizePanelEndpoint(viteConfig.getValue());
+        } catch (IllegalArgumentException e) {
+            return R.err("请在网站配置中明确填写节点连接地址，例如 https://node.example.com:443 或 http://192.0.2.1:6365；不含路径、查询参数或认证信息。");
+        }
+        String installerUrl = "https://raw.githubusercontent.com/shanlianyun/flux-panel/main/install.sh";
+        StringBuilder command = new StringBuilder("curl -fsSL --retry 3 ");
+        command.append(installerUrl)
+               .append(" -o /root/flux-node.sh && bash /root/flux-node.sh install -a ")
+               .append(shellQuote(endpoint)).append(" -s ").append(shellQuote(node.getSecret()));
 
         return R.ok(command.toString());
     }
@@ -358,55 +360,28 @@ public class NodeServiceImpl extends ServiceImpl<NodeMapper, Node> implements No
         return "'" + value.replace("'", "'\"'\"'") + "'";
     }
 
-    /**
-     * 处理服务器地址，确保IPv6地址被方括号包裹
-     * 
-     * @param serverAddr 原始服务器地址，格式可能为 host:port
-     * @return 处理后的服务器地址
-     */
-    private String processServerAddress(String serverAddr) {
-        if (StrUtil.isBlank(serverAddr)) {
-            return serverAddr;
+    /** Require an explicit protocol; the browser scheme and port cannot determine node TLS. */
+    private String normalizePanelEndpoint(String value) {
+        try {
+            java.net.URI endpoint = new java.net.URI(value == null ? "" : value.trim());
+            String scheme = endpoint.getScheme();
+            if (scheme == null) throw new IllegalArgumentException();
+            scheme = scheme.toLowerCase(java.util.Locale.ROOT);
+            String path = endpoint.getRawPath();
+            if ((!scheme.equals("http") && !scheme.equals("https")) || endpoint.getHost() == null
+                    || endpoint.getRawUserInfo() != null || endpoint.getRawQuery() != null
+                    || endpoint.getRawFragment() != null || (path != null && !path.isEmpty() && !path.equals("/"))) {
+                throw new IllegalArgumentException();
+            }
+            int port = endpoint.getPort();
+            if (port == -1) port = scheme.equals("https") ? 443 : 80;
+            if (port < 1 || port > 65535) throw new IllegalArgumentException();
+            String host = endpoint.getHost();
+            if (host.contains(":") && !host.startsWith("[")) host = "[" + host + "]";
+            return scheme + "://" + host + ":" + port;
+        } catch (java.net.URISyntaxException e) {
+            throw new IllegalArgumentException("Invalid node endpoint", e);
         }
-        
-        // 如果已经被方括号包裹，直接返回
-        if (serverAddr.startsWith("[")) {
-            return serverAddr;
-        }
-        
-        // 查找最后一个冒号，分离主机和端口
-        int lastColonIndex = serverAddr.lastIndexOf(':');
-        if (lastColonIndex == -1) {
-            // 没有端口号，直接检查是否需要包裹
-            return isIPv6Address(serverAddr) ? "[" + serverAddr + "]" : serverAddr;
-        }
-        
-        String host = serverAddr.substring(0, lastColonIndex);
-        String port = serverAddr.substring(lastColonIndex);
-        
-        // 检查主机部分是否为IPv6地址
-        if (isIPv6Address(host)) {
-            return "[" + host + "]" + port;
-        }
-        
-        return serverAddr;
-    }
-
-    /**
-     * 判断是否为IPv6地址
-     * 
-     * @param address 地址字符串（不包含端口号）
-     * @return 是否为IPv6地址
-     */
-    private boolean isIPv6Address(String address) {
-        // IPv6地址包含多个冒号，至少2个
-        if (!address.contains(":")) {
-            return false;
-        }
-        
-        // 计算冒号数量，IPv6地址至少有2个冒号
-        long colonCount = address.chars().filter(ch -> ch == ':').count();
-        return colonCount >= 2;
     }
 
     /**

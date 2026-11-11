@@ -207,9 +207,15 @@ func (w *WebSocketReporter) connect() error {
 	headers := make(http.Header)
 	headers.Set("X-Node-Secret", w.secret)
 	headers.Set("X-Node-Capabilities", "paused-services-v1")
-	conn, _, err := dialer.Dial(u.String(), headers)
+	conn, response, err := dialer.Dial(u.String(), headers)
 	if err != nil {
-		return fmt.Errorf("连接WebSocket失败: %v", err)
+		if response != nil {
+			if response.Body != nil {
+				response.Body.Close()
+			}
+			return fmt.Errorf("连接WebSocket失败: HTTP %d: %w", response.StatusCode, err)
+		}
+		return fmt.Errorf("连接WebSocket失败: %w", err)
 	}
 
 	// 如果在连接过程中已经有连接了，关闭新连接

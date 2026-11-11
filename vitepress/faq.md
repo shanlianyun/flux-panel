@@ -28,9 +28,11 @@ bash panel_install.sh
 
 ### 全新机器：复制一条安装命令
 
-先在面板新增节点，再点击该节点的“复制安装命令”，以 root 身份在新节点机器粘贴执行。短命令会调用本 fork 的 `node.sh` 引导脚本；临时目录、安装脚本下载检查和清理由引导脚本处理，节点程序仍需通过 SHA-256 和可执行版本检查。不要手动拆分或删除命令中的参数。
+管理员先在“网站配置 → 节点连接地址”保存完整入口，例如 `https://node.example.com:443`（公网）或 `http://192.0.2.1:6365`（受控内网），必须带协议，不带路径。公网入口先配置有效证书及 WebSocket 反向代理。
 
-如果面板节点入口已配置有效的 HTTPS/WSS 反向代理，先在同一个终端执行 `export GOST_PANEL_SCHEME=https`，再粘贴面板复制的命令。面板“网站配置 → 面板后端地址”应填写对应的 `域名:端口`，不带协议和路径；仅让网页显示 HTTPS 不代表节点入口已经配置正确。
+然后在面板新增节点，在“节点监控/节点管理”点击该节点的安装按钮并复制命令，以 root 身份在新机器执行。命令自动带上协议、地址和节点密钥，不需要先 `export`，也不需要修改 systemd。管理脚本会下载到专用 `/root/flux-node.sh`，下载成功才执行；GOST 二进制仍须通过 SHA-256 和可执行版本检查。
+
+若旧面板配置仍是 `域名:端口`，复制命令时会提示填写完整地址，不会猜测协议。只需在面板修正一次，再重新复制命令。该设置不会自动改变已运行节点，先保留旧节点的 HTTP/WS 通道。仅让网页显示 HTTPS 不代表节点入口已经配置正确。
 
 安装命令包含节点密钥，请勿公开分享，也不要用其他节点的命令安装新节点。已有节点仍使用下方数字菜单选 `2`，不要重复执行新节点安装命令。
 
@@ -52,9 +54,9 @@ curl --fail --location --retry 3 https://raw.githubusercontent.com/shanlianyun/f
 5. 退出
 ```
 
-脚本执行完成后不会删除自身。已有节点选择 `2` 更新，不要选择 `1` 覆盖配置。更新会短暂停止并重启 GOST；建议先选择一台灰度节点验证，再分批更新其他节点。下载校验失败或新二进制无法启动时，脚本会保留/恢复旧二进制。
+脚本执行完成后不会删除自身；通过面板命令安装的机器也可直接运行 `bash /root/flux-node.sh` 打开同一个菜单。已有节点选择 `2` 更新，不要选择 `1` 覆盖配置。更新会短暂停止并重启 GOST；建议先选择一台灰度节点验证，再分批更新其他节点。下载校验失败或新二进制无法启动时，脚本会保留/恢复旧二进制。
 
-公网面板必须先配置 TLS 反向代理，再在安装或更新命令前设置：
+以下环境变量只用于**已有节点切换 HTTPS 的维护操作**，不是全新节点安装的前置步骤。须先确认旧节点保存的地址就是可用的 TLS 入口；若旧地址不支持 TLS，不能只改协议。反向代理就绪后运行：
 
 ```bash
 GOST_PANEL_SCHEME=https bash flux-node.sh
@@ -70,6 +72,62 @@ systemctl is-active gost
 systemctl status gost --no-pager
 journalctl -u gost -n 50 --no-pager
 ```
+
+### 卸载后重新安装同一个节点
+
+这不是日常更新方式。只有明确要清空此机器的节点配置时才卸载；**卸载会停止转发并删除 `/etc/gost` 中的密钥、本地规则及自定义设置**。先备份 `/etc/gost` 和 systemd 配置，并安排维护窗口。
+
+1. 先确认修复版本的面板镜像与节点 Release 已发布，更新面板；在网站配置保存正确的完整节点连接地址。
+2. 保留面板上的原节点记录，不要删除或重新创建。先停止使用同一身份的其他机器，避免两台机器争用同一个节点连接。
+3. 在要重装的机器下载脚本并打开数字菜单：
+
+   ```bash
+   curl --fail --location --retry 3 https://raw.githubusercontent.com/shanlianyun/flux-panel/main/install.sh -o flux-node.sh && bash flux-node.sh
+   ```
+
+4. 选 `3. 卸载`，确认输入 `y`。脚本只删除此前文档提供的标准 `99-panel-https.conf` 协议修正片段，不删除自定义 drop-in；若自定义文件覆盖协议，需要自行核对。
+5. 回到面板的**同一条节点记录**，点击安装并重新复制命令，在机器上整条执行。无需另设环境变量。
+6. 确认脚本显示“已连接面板”、页面在线，再检查原有效规则和实际 TCP/UDP 转发；重连会按面板数据库同步规则，不需要逐条编辑确认。暂停、失效规则不能当作活动规则恢复。本地自定义内容不在面板数据库中，不能靠重连自动找回。
+
+面板不可用时，刚卸载重装的空节点尚无可供恢复的本地转发，必须等面板恢复同步。这与“已有规则在面板维护时继续转发”是不同情况。
+
+### aaPanel 配置 HTTPS/WSS 节点入口
+
+推荐为节点入口单独建立一个域名站点，指向管理面板主机，申请有效 HTTPS 证书，再反代到本机后端。对于原部署后端仍映射到 `6365` 的主机，目标为 `http://127.0.0.1:6365`；自定义端口请按实际映射修改。fork 全新部署若没有映射后端端口，应先按自己的部署方式提供本机可达的后端入口，不要照抄不存在的端口。
+
+在 aaPanel 对应站点的反向代理中启用 WebSocket 支持，保留原路径和查询参数。等效 Nginx 代理片段如下；应修改现有代理块，不要重复添加冲突的 `location /`：
+
+```nginx
+location / {
+    proxy_pass http://127.0.0.1:6365;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_read_timeout 3600s;
+}
+```
+
+必须能将 `/system-info` 的 WebSocket 握手和 `/api/v1/` 的节点上报送到后端，不要将其改写到登录页或静态首页，也不要加浏览器挑战、额外 Basic Auth。代理应保留 `X-Node-Secret`、`X-Node-Capabilities` 请求头；不要把节点密钥写进示例或公开日志。
+
+检查并重载 aaPanel 配置后，在面板“节点连接地址”填写 `https://你的节点入口域名:443`，再复制安装命令。保留旧节点所需的原 HTTP/WS 入口，待逐台验证迁移后再关闭；不要为了新节点改动而中断旧节点。
+
+### 服务已启动但面板显示离线
+
+`systemctl is-active gost` 返回 `active` 只表示进程运行，不表示已通过面板认证。新版安装脚本观察本次服务启动的连接日志，分别提示连接成功、失败或尚未确认；连接检查不会发起第二个节点会话，也不会因面板离线停止本地服务。
+
+```bash
+systemctl is-active gost
+systemctl show gost -p Environment --value | grep -oE 'GOST_PANEL_SCHEME=[^ ]+'
+journalctl -u gost -n 40 --no-pager
+```
+
+对于 `https://` 入口，服务环境应为 `GOST_PANEL_SCHEME=https`。若日志为 `websocket: bad handshake`，新版节点会附上 HTTP 状态码：`200` 常见于代理到了网页，`301/302` 表示重定向，`400` 常见于 Upgrade 未正确转发，`401/403` 需检查节点身份或代理访问限制，`404` 检查路径，`502` 检查后端可达性。状态码只能帮助定位，不能单独确定根因。
+
+证书错误应检查域名、证书链和机器时间，不要关闭 TLS 校验，也不要因 HTTPS 失败自动退回明文。若存在旧的 systemd 自定义 drop-in，请检查是否覆盖了安装命令指定的协议。不要公开粘贴含节点密钥的安装命令或完整配置。
 
 ## 原作者旧节点能否继续使用
 

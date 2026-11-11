@@ -75,6 +75,11 @@ jobs:
           CGO_ENABLED=0 go test github.com/go-gost/x/socket github.com/go-gost/x/api
           (cd x && CGO_ENABLED=0 go test ./service)
 
+      - name: Test copied node command and uninstall/reinstall over HTTP and HTTPS
+        run: |
+          CGO_ENABLED=0 go -C go-gost build -o "$RUNNER_TEMP/node-install-gost" .
+          NODE_INSTALL_E2E_GOST="$RUNNER_TEMP/node-install-gost" mvn -f springboot-backend/pom.xml --batch-mode --no-transfer-progress -Dtest=NodeInstallEndToEndTest test
+
       - name: Check shell syntax
         run: |
           for script in panel_install.sh install.sh node.sh proxy.sh; do

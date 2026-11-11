@@ -46,9 +46,9 @@ interface ConfigItem {
 const CONFIG_ITEMS: ConfigItem[] = [
   {
     key: 'ip',
-    label: '面板后端地址',
-    placeholder: '请输入面板后端IP:PORT',
-    description: '格式“ip:port”,用于对接节点时使用,ip是你安装面板服务器的公网ip,端口是安装脚本内输入的后端端口。不要套CDN,不支持https,通讯数据有加密',
+    label: '节点连接地址',
+    placeholder: '例如 https://node.example.com:443',
+    description: '必须明确填写 http:// 或 https://，不带路径。HTTPS/WSS 入口需有效证书并反代到面板后端，不能只配置网页 HTTPS。复制的安装命令会自动携带协议，无需在节点额外设置。修改此项不会自动修改已有节点。',
     type: 'input'
   },
   {
