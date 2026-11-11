@@ -62,6 +62,8 @@ main "$@"
             script.write_text(source + r'''
 INSTALL_DIR="$FIXTURE/node"
 mkdir -p "$INSTALL_DIR"
+printf '#!/bin/sh\nprintf old-version\n' > "$INSTALL_DIR/gost"
+chmod +x "$INSTALL_DIR/gost"
 select_gost_asset() { DOWNLOAD_URL=fixture; }
 check_and_install_tcpkill() { :; }
 download_and_verify_gost() {
@@ -92,6 +94,8 @@ main "$@"
             self.assertNotIn("操作已完成", result.stdout)
             self.assertNotIn("✅ 更新完成", result.stdout)
             self.assertNotIn("✅ 安装完成", result.stdout)
+            if operation == "update":
+                self.assertIn("old-version", (root / "node/gost").read_text())
 
     def test_install_propagates_service_start_failure(self):
         self.run_service_failure("install", "start", 42)
@@ -129,6 +133,8 @@ main "$@"
             script.write_text(source + r'''
 INSTALL_DIR="$FIXTURE/node"
 mkdir -p "$INSTALL_DIR"
+printf '#!/bin/sh\nprintf old-version\n' > "$INSTALL_DIR/gost"
+chmod +x "$INSTALL_DIR/gost"
 printf '%s\n' '{"addr":"old","secret":"keep"}' > "$INSTALL_DIR/config.json"
 printf '%s\n' '{"custom":true}' > "$INSTALL_DIR/gost.json"
 select_gost_asset() { DOWNLOAD_URL=fixture; }

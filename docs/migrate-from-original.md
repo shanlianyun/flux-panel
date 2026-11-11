@@ -145,4 +145,4 @@ fork 的 [`gost-latest` Release](https://github.com/shanlianyun/flux-panel/relea
 ./install.sh help
 ```
 
-已有旧节点请使用 `update`，不要重新执行 `install`；更新会保留 `/etc/gost/config.json` 和 `/etc/gost/gost.json`，只在下载文件通过 SHA-256 与版本检查后替换二进制。更新期间 GOST 会短暂重启，因此应先灰度一台节点，再按批次滚动更新，并在每台节点执行 `systemctl is-active gost`、`gost -V` 和实际转发检查。公网面板请在 TLS 反向代理就绪后设置 `GOST_PANEL_SCHEME=https`。
+已有旧节点请使用 `update`，不要重新执行 `install`；更新会保留 `/etc/gost/config.json` 和 `/etc/gost/gost.json`，只在下载文件通过 SHA-256 与版本检查后替换二进制。若新二进制无法启动，脚本会恢复旧二进制。更新期间 GOST 会短暂重启，因此应先灰度一台节点，再按批次滚动更新，并在每台节点执行 `systemctl is-active gost`、`gost -V` 和实际转发检查。公网面板请在 TLS 反向代理就绪后设置 `GOST_PANEL_SCHEME=https`。

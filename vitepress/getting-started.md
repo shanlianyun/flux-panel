@@ -74,7 +74,7 @@ bash panel_install.sh help
 ./install.sh update
 ```
 
-更新只替换通过 SHA-256 和版本检查的 GOST 二进制，保留 `/etc/gost/config.json`、`/etc/gost/gost.json`，并短暂重启 `gost` 服务。建议先灰度一台节点，确认转发和节点心跳正常后，再逐台滚动更新。公网面板先配置 TLS 反向代理，然后使用 `GOST_PANEL_SCHEME=https ./install.sh update`。
+更新只替换通过 SHA-256 和版本检查的 GOST 二进制，保留 `/etc/gost/config.json`、`/etc/gost/gost.json`，并短暂重启 `gost` 服务；新二进制启动失败时会恢复旧二进制。建议先灰度一台节点，确认转发和节点心跳正常后，再逐台滚动更新。公网面板先配置 TLS 反向代理，然后使用 `GOST_PANEL_SCHEME=https ./install.sh update`。
 
 面板维护期间，节点本地已运行的转发规则不会因为控制通道断开而停止；新增、编辑、暂停和删除操作需等面板恢复。节点会自动重连并重新同步有效规则。
 

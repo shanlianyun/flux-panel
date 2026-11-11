@@ -215,6 +215,7 @@ SERVICE
 update_gost() {
   echo "🔄 开始更新 GOST..."
   [[ -d "$INSTALL_DIR" ]] || { echo "❌ GOST 未安装，请先执行 install。"; return 1; }
+  [[ -x "$INSTALL_DIR/gost" ]] || { echo "❌ 未找到现有 gost 二进制，请先执行 install。"; return 1; }
   validate_panel_scheme || return 1
   select_gost_asset || return 1
   echo "⬇️ 下载最新版本..."
@@ -224,8 +225,22 @@ update_gost() {
     return 1
   fi
 
+  local previous_binary
+  previous_binary=$(mktemp "${INSTALL_DIR}/gost.rollback.XXXXXX") || return 1
+  if ! cp -p "$INSTALL_DIR/gost" "$previous_binary"; then
+    rm -f "$previous_binary"
+    echo "❌ 无法保存旧 gost 二进制，取消更新。"
+    return 1
+  fi
   if systemctl list-units --full -all | grep -Fq "gost.service"; then
-    systemctl stop gost || return $?
+    local stop_status
+    if systemctl stop gost; then
+      :
+    else
+      stop_status=$?
+      rm -f "$previous_binary"
+      return "$stop_status"
+    fi
   fi
   mv -f "$new_binary" "$INSTALL_DIR/gost"
   echo "🔎 新版本：$($INSTALL_DIR/gost -V)"
@@ -237,11 +252,25 @@ update_gost() {
     fi
     systemctl daemon-reload || return $?
   fi
-  systemctl start gost || return $?
-  if ! systemctl is-active --quiet gost; then
-    echo "❌ gost 服务启动失败，请执行：journalctl -u gost -n 50 --no-pager"
-    return 1
+  local start_status
+  if systemctl start gost; then
+    :
+  else
+    start_status=$?
+    mv -f "$previous_binary" "$INSTALL_DIR/gost"
+    systemctl start gost >/dev/null 2>&1 || true
+    echo "❌ 新 gost 无法启动，已恢复旧二进制。"
+    return "$start_status"
   fi
+  if ! systemctl is-active --quiet gost; then
+    start_status=1
+    mv -f "$previous_binary" "$INSTALL_DIR/gost"
+    systemctl start gost >/dev/null 2>&1 || true
+    echo "❌ gost 服务启动失败，请执行：journalctl -u gost -n 50 --no-pager"
+    echo "ℹ️ 已恢复旧二进制，请检查服务日志。"
+    return "$start_status"
+  fi
+  rm -f "$previous_binary"
   echo "✅ 更新完成，服务已重新启动；现有节点配置未修改。"
 }
 
