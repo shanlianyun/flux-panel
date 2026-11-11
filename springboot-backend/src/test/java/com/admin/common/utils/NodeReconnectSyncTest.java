@@ -348,6 +348,128 @@ class NodeReconnectSyncTest {
         }
     }
 
+    @Test
+    void legacySpeedEditCannotReactivatePausedListenersOrSaveTheGrant() throws Exception {
+        forward.setStatus(0);
+        resources.add("1:Service:100_20_30_tcp");
+        resources.add("1:Service:100_20_30_udp");
+        pausedResources.addAll(resources);
+        connect(1L, false);
+        drainSync();
+        UserTunnelServiceImpl editor = userTunnelEditor();
+        assertNotEquals(0, editor.updateUserTunnel(speedEdit()).getCode());
+        assertNull(userTunnel.getSpeedId(), "Rejected edit changed the stored limiter");
+        verify(editor, never()).updateById(any(UserTunnel.class));
+        assertTrue(commands.isEmpty(), "Legacy node received a listener-changing command: " + commands);
+        assertEquals(resources, pausedResources);
+    }
+
+    @Test
+    void legacyNodeStillAcceptsActiveRuleAndSpeedUpdates() throws Exception {
+        connect(1L, false);
+        drainSync();
+        assertEquals(2, resources.size());
+        assertEquals(0, userTunnelEditor().updateUserTunnel(speedEdit()).getCode());
+        assertEquals("UpdateService", commands.get(commands.size() - 1).getString("type"));
+        assertTrue(pausedResources.isEmpty());
+    }
+
+    @Test
+    void legacyInvalidationMustNotCreateMissingPausedListener() throws Exception {
+        commandHook = type -> { if ("AddService".equals(type)) forward.setStatus(0); };
+        connect(1L, false);
+        drainSync();
+        assertTrue(pausedResources.contains("1:Service:100_20_30_tcp"));
+        assertFalse(resources.contains("1:Service:100_20_30_udp"), "Legacy parser would bind the missing UDP listener");
+        assertEquals(1, addedServices().size(), "Paused metadata must never reach a legacy parser");
+    }
+
+    @Test
+    void legacyCommandBoundaryRejectsPausedUpdatesEvenOutsideGrantEditor() throws Exception {
+        forward.setStatus(0);
+        connect(1L, false);
+        drainSync();
+        assertNotEquals("OK", GostUtil.UpdateService(1L, "100_20_30", 12000, null,
+                forward.getRemoteAddr(), 1, tunnel, "round", "eth0", true).getMsg());
+        assertTrue(commands.isEmpty(), "Unsafe paused config reached the legacy node");
+    }
+
+    @Test
+    void nodeHandshakePreservesQuerySecretAndRequiresExplicitPauseCapability() throws Exception {
+        com.admin.config.WebSocketInterceptor interceptor = new com.admin.config.WebSocketInterceptor();
+        NodeService nodes = context.getBean(NodeService.class);
+        Node node = new Node(); node.setId(1L);
+        when(nodes.getOne(any())).thenReturn(node);
+        ReflectionTestUtils.setField(interceptor, "nodeService", nodes);
+        org.springframework.mock.web.MockHttpServletRequest request = new org.springframework.mock.web.MockHttpServletRequest();
+        request.setParameter("type", "1"); request.setParameter("secret", "legacy-fixture-secret");
+        request.setParameter("version", "1.2.0");
+        Map<String, Object> attributes = new HashMap<>();
+        assertTrue(interceptor.beforeHandshake(new org.springframework.http.server.ServletServerHttpRequest(request),
+                new org.springframework.http.server.ServletServerHttpResponse(new org.springframework.mock.web.MockHttpServletResponse()), null, attributes));
+        assertEquals("legacy-fixture-secret", attributes.get("nodeSecret"));
+        assertEquals(Boolean.FALSE, attributes.get("supportsPausedServices"));
+        request.addHeader("X-Node-Capabilities", "other, paused-services-v1");
+        attributes.clear();
+        assertTrue(interceptor.beforeHandshake(new org.springframework.http.server.ServletServerHttpRequest(request),
+                new org.springframework.http.server.ServletServerHttpResponse(new org.springframework.mock.web.MockHttpServletResponse()), null, attributes));
+        assertEquals(Boolean.TRUE, attributes.get("supportsPausedServices"));
+    }
+
+    @Test
+    void disconnectedNodeCannotAcceptPausedSpeedEdit() throws Exception {
+        forward.setStatus(0);
+        UserTunnelServiceImpl editor = userTunnelEditor();
+        assertNotEquals(0, editor.updateUserTunnel(speedEdit()).getCode());
+        assertNull(userTunnel.getSpeedId());
+        verify(editor, never()).updateById(any(UserTunnel.class));
+    }
+
+    @Test
+    void legacyNodeCanStillUpdateGrantWithoutChangingPausedSpeed() throws Exception {
+        forward.setStatus(0);
+        connect(1L, false);
+        drainSync();
+        UserTunnelUpdateDto dto = speedEdit();
+        dto.setSpeedId(null);
+        assertEquals(0, userTunnelEditor().updateUserTunnel(dto).getCode());
+        assertTrue(commands.isEmpty());
+    }
+
+    @Test
+    void pausedCommandCannotLeakToLegacyReplacementSession() throws Exception {
+        forward.setStatus(0);
+        WebSocketSession modern = connect(1L);
+        drainSync();
+        assertTrue(WebSocketServer.supportsPausedServices(1L));
+        connect(1L, false);
+        drainSync();
+        assertFalse(WebSocketServer.supportsPausedServices(1L));
+        assertNotEquals("OK", GostUtil.UpdateService(1L, "100_20_30", 12000, null,
+                forward.getRemoteAddr(), 1, tunnel, "round", "eth0", true).getMsg());
+        assertTrue(commands.isEmpty());
+        assertFalse(WebSocketServer.isCurrentNodeSession(1L, modern.getId()));
+    }
+
+    @Test
+    void speedEditReportsFailureIfLegacyNodeReplacesModernNodeAfterPreflight() throws Exception {
+        forward.setStatus(0);
+        resources.add("1:Service:100_20_30_tcp");
+        resources.add("1:Service:100_20_30_udp");
+        pausedResources.addAll(resources);
+        connect(1L);
+        drainSync();
+        UserTunnelServiceImpl editor = userTunnelEditor();
+        doAnswer(invocation -> { connect(1L, false); return true; }).when(editor).updateById(any(UserTunnel.class));
+        com.admin.common.lang.R result = editor.updateUserTunnel(speedEdit());
+        assertNotEquals(0, result.getCode(), "Rejected remote config was reported as success");
+        assertTrue(result.getMsg().contains("权限已保存") && result.getMsg().contains("节点限速同步失败"),
+                "Partial save must be distinguished from a fully rejected edit");
+        assertEquals(40, userTunnel.getSpeedId());
+        assertTrue(commands.isEmpty());
+        assertEquals(resources, pausedResources);
+    }
+
     private UserTunnelServiceImpl userTunnelEditor() {
         UserTunnelServiceImpl editor = spy(new UserTunnelServiceImpl());
         doReturn(userTunnel).when(editor).getById(any());
@@ -578,12 +700,17 @@ class NodeReconnectSyncTest {
     }
 
     private WebSocketSession connect(long nodeId) throws Exception {
+        return connect(nodeId, true);
+    }
+
+    private WebSocketSession connect(long nodeId, boolean supportsPausedServices) throws Exception {
         WebSocketSession session = mock(WebSocketSession.class);
         String sessionId = UUID.randomUUID().toString();
         when(session.getId()).thenReturn(sessionId);
         Map<String, Object> attributes = new HashMap<>();
         attributes.put("id", Long.toString(nodeId));
         attributes.put("type", "1");
+        attributes.put("supportsPausedServices", supportsPausedServices);
         when(session.getAttributes()).thenReturn(attributes);
         when(session.isOpen()).thenReturn(true);
         doAnswer(invocation -> {
@@ -628,14 +755,15 @@ class NodeReconnectSyncTest {
                     && rejectedService.equals(request.getJSONArray("data").getJSONObject(0).getString("name"))) {
                 response = "address already in use";
             }
-            if ("OK".equals(response) && type.startsWith("Add")) {
+            if ("OK".equals(response) && (type.startsWith("Add") || type.startsWith("Update"))) {
                 for (String name : names) {
                     resources.add(nodeId + ":" + kind + ":" + name);
                 }
                 if ("Service".equals(kind)) {
+                    for (String name : names) pausedResources.remove(nodeId + ":Service:" + name);
                     for (Object item : request.getJSONArray("data")) {
                         JSONObject cfg = (JSONObject) item;
-                        if (cfg.getJSONObject("metadata") != null && cfg.getJSONObject("metadata").getBooleanValue("paused")) {
+                        if (supportsPausedServices && cfg.getJSONObject("metadata") != null && cfg.getJSONObject("metadata").getBooleanValue("paused")) {
                             pausedResources.add(nodeId + ":Service:" + cfg.getString("name"));
                         }
                     }

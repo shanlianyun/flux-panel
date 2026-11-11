@@ -19,6 +19,7 @@ import org.springframework.web.socket.server.support.HttpSessionHandshakeInterce
 import javax.annotation.Resource;
 import java.net.InetSocketAddress;
 import java.util.Map;
+import java.util.Arrays;
 import java.util.Objects;
 
 
@@ -53,6 +54,9 @@ public class WebSocketInterceptor extends HttpSessionHandshakeInterceptor {
             attributes.put("id", node.getId());
             attributes.put("nodeSecret", secret);
             attributes.put("nodeVersion", version);
+            String capabilities = serverHttpRequest.getServletRequest().getHeader("X-Node-Capabilities");
+            attributes.put("supportsPausedServices", capabilities != null && Arrays.stream(capabilities.split(","))
+                    .map(String::trim).anyMatch("paused-services-v1"::equals));
             log.info("节点 {} 通过验证，版本: {}", node.getId(), version);
             // 不在这里更新状态，等到连接建立后再统一更新
         }else {
